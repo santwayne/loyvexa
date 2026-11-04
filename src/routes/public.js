@@ -5,6 +5,8 @@ import { extractCode, formatCode } from '../lib/codes.js';
 import { verify } from '../services/qr.js';
 import { getProvider } from '../services/payouts/index.js';
 import { settleRedemption } from '../services/redemption.js';
+import { getCallProvider } from '../services/calls/providers.js';
+import { settleCall } from '../services/calls/index.js';
 import { config } from '../config.js';
 
 const r = Router();
@@ -21,6 +23,15 @@ r.post('/api/webhooks/payouts/:provider', ah(async (req, res) => {
   const evt = getProvider(req.params.provider).parseWebhook(req);
   if (!evt?.redemptionId) return res.status(400).json({ ok: false });
   await settleRedemption(evt);
+  res.json({ ok: true });
+}));
+
+// AI call outcomes (WayneRing or mock)
+r.post('/api/webhooks/calls/:provider', ah(async (req, res) => {
+  let p; try { p = getCallProvider(req.params.provider); } catch { return res.status(404).json({ ok: false }); }
+  const evt = p.parseWebhook(req);
+  if (!evt || !(evt.callId || evt.providerCallId)) return res.status(400).json({ ok: false });
+  await settleCall(evt);
   res.json({ ok: true });
 }));
 

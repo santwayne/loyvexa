@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { ah } from '../lib/errors.js';
 import { channelByPhoneNumberId, verifySignature } from '../services/whatsapp.js';
 import { handleInbound } from '../services/bot.js';
+import { applyStatus } from '../services/campaigns.js';
 
 /** Meta WhatsApp Cloud API webhook. One URL for all brands; routed by phone_number_id. */
 const r = Router();
@@ -21,6 +22,7 @@ r.post('/webhook', ah(async (req, res) => {
       const v = ch.value || {};
       const channel = v.metadata?.phone_number_id ? await channelByPhoneNumberId(v.metadata.phone_number_id) : null;
       if (!channel) continue;
+      for (const st of v.statuses || []) jobs.push(applyStatus({ providerMsgId: st.id, status: st.status, error: st.errors?.[0]?.title }));
       for (const m of v.messages || []) {
         const text = m.type === 'text' ? m.text?.body
           : m.type === 'button' ? m.button?.text

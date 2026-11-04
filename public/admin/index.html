@@ -30,6 +30,7 @@
   .muted { color:var(--muted) } .err { color:var(--bad); margin-top:8px; min-height:18px }
   .bars { display:flex; align-items:flex-end; gap:3px; height:140px; padding-top:8px } .bars div { flex:1; background:var(--brand); border-radius:3px 3px 0 0; min-height:2px; opacity:.85 }
   .hidden { display:none !important }
+  .seg { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11.5px; font-weight:600 } .seg.NEW { background:#e8f0fe; color:#1a4fb3 } .seg.REGULAR { background:#e6f4ea; color:#1a7f37 } .seg.HIGH_SPENDER { background:#fff1d6; color:#8a5a00 } .seg.AT_RISK { background:#fff4e0; color:#b26a00 } .seg.DORMANT { background:#fdecea; color:#c62828 }
   .slabrow { display:grid; grid-template-columns:1fr 1fr 1fr 1fr auto; gap:8px; margin-top:8px }
   .key { font-family:ui-monospace,Menlo,monospace; background:#fff8e1; border:1px dashed #e0b000; padding:10px; border-radius:10px; word-break:break-all }
   .chat { max-width:520px; background:#ece5dd; border-radius:12px; padding:12px; height:420px; overflow:auto; display:flex; flex-direction:column; gap:6px }
@@ -61,6 +62,10 @@
     <a data-v="invoices">Invoices <span class="badge hidden" id="unmBadge"></span></a>
     <a data-v="connectors">Connectors</a>
     <a data-v="whatsapp">WhatsApp</a>
+    <a data-v="segments">Segments</a>
+    <a data-v="calls">AI calls</a>
+    <a data-v="orders">Orders <span class="badge hidden" id="ordBadge"></span></a>
+    <a data-v="campaigns">Campaigns</a>
     <a data-v="redemptions">Redemptions <span class="badge hidden" id="pendBadge"></span></a>
     <a data-v="fraud">Fraud flags <span class="badge hidden" id="fraudBadge"></span></a>
     <a data-v="settings">Settings</a>

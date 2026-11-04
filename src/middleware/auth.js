@@ -4,7 +4,7 @@ import { query } from '../db/pool.js';
 import { unauthorized, forbidden } from '../lib/errors.js';
 
 export const signAdmin = (u) => jwt.sign({ kind: 'admin', sub: u.id, role: u.role, tenantId: u.tenant_id }, config.jwtSecret, { expiresIn: config.adminTokenTtl });
-export const signParticipant = (p) => jwt.sign({ kind: 'participant', sub: p.id, tenantId: p.tenant_id }, config.jwtSecret, { expiresIn: config.participantTokenTtl });
+export const signParticipant = (p, ttl = config.participantTokenTtl) => jwt.sign({ kind: 'participant', sub: p.id, tenantId: p.tenant_id }, config.jwtSecret, { expiresIn: ttl });
 
 function bearer(req) {
   const h = req.headers.authorization || '';

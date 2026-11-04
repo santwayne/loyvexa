@@ -8,6 +8,14 @@ import { config } from './config.js';
 import { migrate } from './db/migrate.js';
 import { deliverEvent } from './services/notifications.js';
 import { autoSettleDue } from './services/schemes.js';
+import { recomputeAll } from './services/segments.js';
+import { dispatchDue } from './services/calls/index.js';
+import { pushPlaced } from './services/orders.js';
+import { sendDue } from './services/campaigns.js';
+import { runExpiry } from './services/expiry.js';
+
+const HOUR = 3600000;
+const lastRun = { segments: 0, expiry: 0 };
 
 const MAX_ATTEMPTS = 5;
 
@@ -38,11 +46,17 @@ export async function processEventsOnce(batch = 100) {
   return n;
 }
 
-export async function tick() {
+export async function tick({ force = false } = {}) {
+  const now = Date.now();
   const settled = await autoSettleDue();
+  const segments = force || now - lastRun.segments > HOUR ? (lastRun.segments = now, await recomputeAll()) : null;
+  const expiry = force || now - lastRun.expiry > 6 * HOUR ? (lastRun.expiry = now, await runExpiry()) : null;
+  const calls = await dispatchDue();
+  const ordersPushed = await pushPlaced();
+  const campaignMsgs = await sendDue();
   let delivered = 0; let k;
   do { k = await processEventsOnce(); delivered += k; } while (k === 100);
-  return { settled, delivered };
+  return { settled, delivered, calls, ordersPushed, campaignMsgs, segments, expiry };
 }
 
 if (process.argv[1]?.endsWith('worker.js')) {
@@ -51,7 +65,7 @@ if (process.argv[1]?.endsWith('worker.js')) {
   const loop = async () => {
     try {
       const r = await tick();
-      if (r.delivered || r.settled.length) console.log(new Date().toISOString(), `delivered=${r.delivered} settled=${r.settled.length}`);
+      if (r.delivered || r.settled.length || r.calls || r.ordersPushed || r.campaignMsgs) console.log(new Date().toISOString(), `delivered=${r.delivered} settled=${r.settled.length} calls=${r.calls} orders=${r.ordersPushed} campaign=${r.campaignMsgs}`);
     } catch (e) { console.error('worker error', e); }
     setTimeout(loop, config.workerIntervalMs);
   };

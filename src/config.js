@@ -21,6 +21,16 @@ export const config = {
     appSecret: process.env.WHATSAPP_APP_SECRET || '',     // enables X-Hub-Signature-256 check
     graphVersion: process.env.WHATSAPP_GRAPH_VERSION || 'v21.0',
   },
+  calls: {
+    provider: process.env.CALL_PROVIDER || 'mock', // mock | waynering
+    wayneringBaseUrl: process.env.WAYNERING_BASE_URL || '',
+    wayneringApiKey: process.env.WAYNERING_API_KEY || '',
+    webhookSecret: process.env.CALL_WEBHOOK_SECRET || '',
+  },
+  korvo: {
+    baseUrl: process.env.KORVO_BASE_URL || '',
+    apiKey: process.env.KORVO_API_KEY || '',
+  },
   workerIntervalMs: Number(process.env.WORKER_INTERVAL_MS || 15000),
   corsOrigins: (process.env.CORS_ORIGINS || '*').split(',').map((s) => s.trim()),
 };
@@ -43,6 +53,24 @@ export const DEFAULT_TENANT_SETTINGS = {
   purchaseEarnEnabled: true,
   purchasePointsPer1000: 10,     // 10 points per ₹1,000 taxable value (unless product overrides per unit)
   purchaseEarnTypes: ['DEALER', 'DISTRIBUTOR', 'RETAILER'],
+  // Phase 3 — segmentation
+  segNewDays: 14,                // joined within N days and not yet a regular
+  segAtRiskDays: 21,             // no activity for N days -> AT_RISK
+  segDormantDays: 45,            // no activity for N days -> DORMANT
+  segHighValuePoints90d: 2000,   // earned >= N points in 90 days and active -> HIGH_SPENDER
+  // Phase 3 — AI calls
+  callHoursStart: 9,             // IST, inclusive
+  callHoursEnd: 21,              // IST, exclusive
+  callCooldownDays: 7,           // max one call per participant per N days
+  // Phase 3 — WhatsApp ordering
+  orderDms: 'mock',              // mock | korvo | none (record only, brand team processes)
+  orderEnabledTypes: ['DEALER', 'DISTRIBUTOR', 'RETAILER'],
+  // Phase 3 — WhatsApp campaigns
+  waCampaignPerTick: 60,         // messages per worker tick
+  waCampaignDailyCap: 1000,      // campaign messages per brand per day
+  // Phase 3 — points expiry
+  pointsExpiryMonths: 0,         // 0 = points never expire
+  expiryReminderDays: 30,
 };
 
 if (process.env.NODE_ENV === 'production') {

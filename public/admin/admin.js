@@ -72,6 +72,7 @@ async function refreshBadges() {
     $('pendBadge').textContent = k.pending_redemptions; $('pendBadge').classList.toggle('hidden', !k.pending_redemptions);
     $('fraudBadge').textContent = k.open_fraud_flags; $('fraudBadge').classList.toggle('hidden', !k.open_fraud_flags);
     $('unmBadge').textContent = k.unmatched_invoices; $('unmBadge').classList.toggle('hidden', !k.unmatched_invoices);
+    $('ordBadge').textContent = k.orders_waiting; $('ordBadge').classList.toggle('hidden', !k.orders_waiting);
   } catch { /* ignore */ }
 }
 
@@ -82,6 +83,7 @@ views.dashboard = async () => {
   $('pendBadge').textContent = k.pending_redemptions; $('pendBadge').classList.toggle('hidden', !k.pending_redemptions);
   $('fraudBadge').textContent = k.open_fraud_flags; $('fraudBadge').classList.toggle('hidden', !k.open_fraud_flags);
   $('unmBadge').textContent = k.unmatched_invoices; $('unmBadge').classList.toggle('hidden', !k.unmatched_invoices);
+  $('ordBadge').textContent = k.orders_waiting; $('ordBadge').classList.toggle('hidden', !k.orders_waiting);
   const max = Math.max(1, ...d.daily.map((x) => Number(x.scans)));
   const tile = (v, l) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`;
   $('main').innerHTML = `<h2>Dashboard</h2>
@@ -91,6 +93,7 @@ views.dashboard = async () => {
     ${tile(num(k.points_issued), 'Points issued')}${tile(num(k.points_liability), 'Points outstanding (liability)')}
     ${tile(inr(k.paid_paise), 'Paid out via UPI')}${tile(num(k.pending_redemptions), 'Payouts awaiting approval')}
     ${tile(inr(k.purchase_paise_30d), 'Dealer purchases (30 days)')}${tile(num(k.active_schemes), 'Live schemes')}
+    ${tile(num(k.at_risk), 'At risk + dormant')}${tile(inr(k.wa_orders_paise_30d), 'WhatsApp orders (30 days)')}
   </div>
   <div class="panel"><h3>Scans per day — last 30 days</h3><div class="bars">${d.daily.map((x) => `<div title="${new Date(x.day).toLocaleDateString('en-IN')}: ${x.scans} scans" style="height:${(Number(x.scans) / max) * 100}%"></div>`).join('')}</div></div>
   <div class="grid2">
@@ -112,10 +115,10 @@ views.products = async () => {
   $('main').innerHTML = `<h2>Products</h2>
   <div class="panel"><h3>Add product</h3><div class="row">
     <div><label>SKU</label><input id="pSku"></div><div><label>Name</label><input id="pName"></div><div><label>Category</label><input id="pCat"></div>
-    <div><label>Points per scan</label><input id="pPts" type="number" min="0"></div><div><label>Retailer points (optional)</label><input id="pRet" type="number" min="0"></div>
+    <div><label>Points per scan</label><input id="pPts" type="number" min="0"></div><div><label>Dealer price ₹ (for ordering)</label><input id="pPrice" type="number" min="0" step="0.01"></div><div><label>Retailer points (optional)</label><input id="pRet" type="number" min="0"></div>
     <div style="flex:0"><button class="p" id="pAdd">Add</button></div></div><div class="err" id="pErr"></div></div>
-  <div class="panel"><table><tr><th>SKU</th><th>Name</th><th>Category</th><th class="num">Points</th><th>Per type</th><th class="num">Printed</th><th class="num">Scanned</th><th>Status</th><th></th></tr>
-  ${products.map((p) => `<tr><td>${esc(p.sku)}</td><td>${esc(p.name)}</td><td>${esc(p.category || '—')}</td><td class="num">${p.points}</td>
+  <div class="panel"><table><tr><th>SKU</th><th>Name</th><th>Category</th><th class="num">Price</th><th class="num">Points</th><th>Per type</th><th class="num">Printed</th><th class="num">Scanned</th><th>Status</th><th></th></tr>
+  ${products.map((p) => `<tr><td>${esc(p.sku)}</td><td>${esc(p.name)}</td><td>${esc(p.category || '—')}</td><td class="num">${p.price_paise != null ? inr(p.price_paise) : '—'}</td><td class="num">${p.points}</td>
     <td class="muted">${esc(Object.entries(p.points_by_type || {}).map(([a, b]) => `${a}: ${b}`).join(', ') || '—')}</td>
     <td class="num">${num(p.codes_generated)}</td><td class="num">${num(p.codes_scanned)}</td>
     <td>${p.active ? '<span class="pill ok">Active</span>' : '<span class="pill">Paused</span>'}</td>
@@ -123,7 +126,7 @@ views.products = async () => {
   $('pAdd').onclick = async () => {
     try {
       const ret = $('pRet').value;
-      await api('/api/admin/products', { method: 'POST', body: { sku: $('pSku').value.trim(), name: $('pName').value.trim(), category: $('pCat').value.trim() || undefined, points: Number($('pPts').value || 0), pointsByType: ret !== '' ? { RETAILER: Number(ret) } : undefined } });
+      await api('/api/admin/products', { method: 'POST', body: { sku: $('pSku').value.trim(), name: $('pName').value.trim(), category: $('pCat').value.trim() || undefined, points: Number($('pPts').value || 0), pricePaise: $('pPrice').value !== '' ? Math.round(Number($('pPrice').value) * 100) : undefined, pointsByType: ret !== '' ? { RETAILER: Number(ret) } : undefined } });
       render();
     } catch (e) { $('pErr').textContent = e.message; }
   };
@@ -161,18 +164,19 @@ views.qr = async () => {
 };
 
 // ---------- participants ----------
-let pQuery = '';
+let pQuery = ''; let pSeg = '';
 views.participants = async () => {
-  const { participants, total } = await api(`/api/admin/participants?limit=200&q=${encodeURIComponent(pQuery)}`);
+  const { participants, total } = await api(`/api/admin/participants?limit=200&q=${encodeURIComponent(pQuery)}&segment=${pSeg}`);
   $('main').innerHTML = `<h2>Participants <span class="muted" style="font-size:14px">(${num(total)})</span></h2>
-  <div class="panel"><div class="row"><div><input id="pq" placeholder="Search name, mobile, city" value="${esc(pQuery)}"></div><div style="flex:0"><button id="pqBtn">Search</button></div></div></div>
-  <div class="panel"><table><tr><th>Name</th><th>Type</th><th>Mobile</th><th>City</th><th class="num">Balance</th><th class="num">Lifetime</th><th>Last scan</th><th>Status</th><th></th></tr>
-  ${participants.map((p) => `<tr><td>${esc(p.name || '—')}</td><td>${esc(p.type)}</td><td>${esc(p.mobile)}</td><td>${esc(p.city || '—')}</td>
+  <div class="panel"><div class="row"><div><input id="pq" placeholder="Search name, mobile, city" value="${esc(pQuery)}"></div><div style="flex:0;min-width:180px"><select id="pseg"><option value="">All segments</option>${['NEW', 'REGULAR', 'HIGH_SPENDER', 'AT_RISK', 'DORMANT'].map((x) => `<option ${x === pSeg ? 'selected' : ''}>${x}</option>`).join('')}</select></div><div style="flex:0"><button id="pqBtn">Search</button></div></div></div>
+  <div class="panel"><table><tr><th>Name</th><th>Type</th><th>Segment</th><th>Mobile</th><th>City</th><th class="num">Balance</th><th class="num">Lifetime</th><th>Last scan</th><th>Status</th><th></th></tr>
+  ${participants.map((p) => `<tr><td>${esc(p.name || '—')}${p.dnd ? ' <span class="muted">· DND</span>' : ''}${p.wa_opt_out ? ' <span class="muted">· STOP</span>' : ''}</td><td>${esc(p.type)}</td><td>${p.segment ? `<span class="seg ${p.segment}">${p.segment.replace('_', ' ')}</span>` : '—'}</td><td>${esc(p.mobile)}</td><td>${esc(p.city || '—')}</td>
     <td class="num">${num(p.balance)}</td><td class="num">${num(p.lifetime_earned)}</td><td>${dt(p.last_scan_at)}</td>
     <td>${p.status === 'ACTIVE' ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Blocked</span>'}</td>
     <td><button class="sm ${p.status === 'ACTIVE' ? 'danger' : ''}" data-block="${p.id}" data-status="${p.status}">${p.status === 'ACTIVE' ? 'Block' : 'Unblock'}</button>
         <button class="sm" data-adj="${p.id}">± Points</button></td></tr>`).join('')}</table></div>`;
-  $('pqBtn').onclick = () => { pQuery = $('pq').value; render(); };
+  $('pqBtn').onclick = () => { pQuery = $('pq').value; pSeg = $('pseg').value; render(); };
+  $('pseg').onchange = () => $('pqBtn').click();
   $('pq').addEventListener('keydown', (e) => e.key === 'Enter' && $('pqBtn').click());
   document.querySelectorAll('[data-block]').forEach((b) => b.onclick = async () => {
     await api(`/api/admin/participants/${b.dataset.block}`, { method: 'PATCH', body: { status: b.dataset.status === 'ACTIVE' ? 'BLOCKED' : 'ACTIVE', clearScanBlock: true } }); render();
@@ -232,7 +236,9 @@ views.settings = async () => {
   <div class="panel"><h3>Programme rules</h3><div class="row">
     ${f('pointValuePaise', 'Value of 1 point (paise)')}${f('minRedeemPoints', 'Minimum points to cash out')}${f('maxRedeemPointsPerDay', 'Max cash-out points per day')}
     ${f('autoApproveRedeemUptoPoints', 'Auto-approve payouts up to (points, 0 = off)')}</div><div class="row">
-    ${f('dailyScanLimit', 'Scans per person per day')}${f('burstScanLimit', 'Scans allowed per minute')}${f('invalidScanLimitPerHour', 'Invalid scans before pause')}${f('maxParticipantsPerDevice', 'Accounts per phone')}</div>
+    ${f('dailyScanLimit', 'Scans per person per day')}${f('burstScanLimit', 'Scans allowed per minute')}${f('invalidScanLimitPerHour', 'Invalid scans before pause')}${f('maxParticipantsPerDevice', 'Accounts per phone')}</div><div class="row">
+    ${f('pointsExpiryMonths', 'Points expire after (months, 0 = never)')}${f('segAtRiskDays', 'At risk after (days idle)')}${f('segDormantDays', 'Dormant after (days idle)')}${f('segHighValuePoints90d', 'High spender: points in 90 days')}</div><div class="row">
+    ${f('callHoursStart', 'Calls from (hour, IST)')}${f('callHoursEnd', 'Calls until (hour, IST)')}${f('callCooldownDays', 'Days between calls to one person')}${f('waCampaignDailyCap', 'Campaign messages per day')}</div>
     <button class="p" style="margin-top:14px" id="saveSet">Save</button><div class="err" id="setErr"></div></div>`;
   $('saveSet').onclick = async () => {
     const settings = {}; document.querySelectorAll('[data-set]').forEach((i) => { settings[i.dataset.set] = Number(i.value); });
@@ -352,7 +358,7 @@ views.invoices = async () => {
 };
 
 // ---------- Connectors ----------
-const CTYPES = { TALLY: 'Tally (Prime / ERP 9)', ZOHO_BOOKS: 'Zoho Books', BUSY: 'Busy', MARG: 'Marg', CSV: 'Excel / CSV (any software)', ROYAL: 'Royal DMS', GENERIC: 'Custom software (REST API)' };
+const CTYPES = { TALLY: 'Tally (Prime / ERP 9)', ZOHO_BOOKS: 'Zoho Books', BUSY: 'Busy', MARG: 'Marg', CSV: 'Excel / CSV (any software)', ROYAL: 'Korvo (Royal) DMS', GENERIC: 'Custom software (REST API)' };
 views.connectors = async () => {
   const { connectors, endpoints } = await api('/api/admin/connectors');
   $('main').innerHTML = `<h2>Connectors</h2>
@@ -434,4 +440,101 @@ views.whatsapp = async () => {
     try { const r = await api('/api/admin/whatsapp/simulate', { method: 'POST', body: { from: $('sFrom').value, text } }); bub(r.reply, 'out'); } catch (e) { bub(`(${e.message})`, 'out'); }
   };
   $('sText').addEventListener('keydown', (e) => e.key === 'Enter' && $('sSend').click());
+};
+
+// ================= Phase 3 =================
+const SEGS = ['NEW', 'REGULAR', 'HIGH_SPENDER', 'AT_RISK', 'DORMANT'];
+const SEG_HELP = { NEW: 'Joined in the last 2 weeks', REGULAR: 'Active recently', HIGH_SPENDER: 'Active and earning a lot', AT_RISK: 'Gone quiet — act now', DORMANT: 'Inactive for 45+ days' };
+const segPill = (x) => (x ? `<span class="seg ${x}">${x.replace('_', ' ')}</span>` : '—');
+const multi = (id, opts, size = 4) => `<select id="${id}" multiple size="${size}">${opts.map((o) => `<option>${o}</option>`).join('')}</select>`;
+const sel = (id) => [...$(id).selectedOptions].map((o) => o.value);
+
+views.segments = async () => {
+  const d = await api('/api/admin/segments');
+  const total = Object.values(d.bySegment).reduce((a, b) => a + b, 0) || 1;
+  $('main').innerHTML = `<h2>Segments</h2>
+  <div class="kpis">${SEGS.map((x) => `<div class="kpi"><div class="v">${num(d.bySegment[x] || 0)}</div><div class="l">${segPill(x)} <span style="margin-left:4px">${Math.round(((d.bySegment[x] || 0) / total) * 100)}%</span></div><div class="muted" style="font-size:12px;margin-top:4px">${SEG_HELP[x]}</div></div>`).join('')}</div>
+  <div class="panel"><div class="row"><div class="muted">Segments refresh every hour. Dealers are scored on purchases, mechanics and retailers on scans. Thresholds are in Settings.</div><div style="flex:0"><button id="recomp">Refresh now</button></div></div></div>
+  <div class="grid2"><div class="panel"><h3>By type</h3><table><tr><th>Type</th>${SEGS.map((x) => `<th class="num">${x.replace('_', ' ')}</th>`).join('')}</tr>
+    ${[...new Set(d.byType.map((r) => r.type))].map((t) => `<tr><td>${esc(t)}</td>${SEGS.map((x) => `<td class="num">${num(d.byType.find((r) => r.type === t && r.segment === x)?.n || 0)}</td>`).join('')}</tr>`).join('')}</table></div>
+  <div class="panel"><h3>Recent changes</h3><table><tr><th>When</th><th>Who</th><th>Change</th></tr>
+    ${d.recentChanges.slice(0, 20).map((c) => `<tr><td>${dt(c.computed_at)}</td><td>${esc(c.name || '—')}<div class="muted">${esc(c.type)} · ${esc(c.city || '')}</div></td><td>${segPill(c.previous)} → ${segPill(c.segment)}</td></tr>`).join('')}</table></div></div>`;
+  $('recomp').onclick = async () => { await api('/api/admin/segments/recompute', { method: 'POST', body: {} }); render(); };
+};
+
+views.calls = async () => {
+  const { campaigns } = await api('/api/admin/call-campaigns');
+  $('main').innerHTML = `<h2>AI calls</h2>
+  <div class="panel"><h3>New call campaign</h3><p class="muted">Calls go out through WayneRing in Hindi, Punjabi or English, only during calling hours, never to DND numbers, and at most once a week per person. Calls never change points.</p>
+    <div class="row"><div><label>Name</label><input id="cName" placeholder="Win back dormant mechanics"></div>
+      <div><label>Script</label><select id="cScript"><option value="WINBACK">Win back (why did you stop?)</option><option value="SCHEME_REMINDER">Scheme reminder</option><option value="FEEDBACK">Feedback</option></select></div>
+      <div><label>Language</label><select id="cLang"><option value="hi">Hindi</option><option value="pa">Punjabi</option><option value="en">English</option></select></div>
+      <div><label>City (optional)</label><input id="cCity"></div></div>
+    <div class="row"><div><label>Segments</label>${multi('cSeg', SEGS, 5)}</div><div><label>Types</label>${multi('cTypes', PT, 5)}</div></div>
+    <button class="p" id="cCreate" style="margin-top:12px">Create &amp; launch</button><div class="err" id="cErr"></div></div>
+  <div class="panel"><table><tr><th>Campaign</th><th>Audience</th><th>Status</th><th class="num">Calls</th><th>Outcomes</th><th></th></tr>
+  ${campaigns.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="muted">${esc(c.script.replace('_', ' '))} · ${esc(c.language)}</div></td>
+    <td class="muted">${esc([c.segments.join(', '), c.participant_types.join(', '), c.city].filter(Boolean).join(' · ') || 'Everyone')}</td>
+    <td><span class="pill ${c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : ''}">${c.status}</span></td>
+    <td class="num">${num(c.stats.completed)} / ${num(c.stats.total)}</td>
+    <td class="muted">${esc(Object.entries(c.stats.outcomes).map(([k, v]) => `${k.replace('_', ' ').toLowerCase()} ${v}`).join(' · ') || '—')}</td>
+    <td><button class="sm" data-calls="${c.id}">Calls</button> ${['DRAFT', 'RUNNING'].includes(c.status) ? `<button class="sm danger" data-ccancel="${c.id}">Cancel</button>` : ''}</td></tr>`).join('')}</table></div><div id="callBox"></div>`;
+  $('cCreate').onclick = async () => {
+    try {
+      const { campaign } = await api('/api/admin/call-campaigns', { method: 'POST', body: { name: $('cName').value, script: $('cScript').value, language: $('cLang').value, city: $('cCity').value || undefined, segments: sel('cSeg'), participantTypes: sel('cTypes') } });
+      const r = await api(`/api/admin/call-campaigns/${campaign.id}/launch`, { method: 'POST' });
+      alert(`${r.queued} calls queued · skipped: ${r.skipped.dnd} DND, ${r.skipped.cooldown} called this week`);
+      await api('/api/admin/call-campaigns/dispatch', { method: 'POST' }); render();
+    } catch (e) { $('cErr').textContent = e.message; }
+  };
+  document.querySelectorAll('[data-ccancel]').forEach((b) => b.onclick = async () => { await api(`/api/admin/call-campaigns/${b.dataset.ccancel}/cancel`, { method: 'POST' }); render(); });
+  document.querySelectorAll('[data-calls]').forEach((b) => b.onclick = async () => {
+    const { calls } = await api(`/api/admin/call-campaigns/${b.dataset.calls}/calls`);
+    $('callBox').innerHTML = `<div class="panel"><h3>Calls</h3><table><tr><th>Who</th><th>Segment</th><th>Status</th><th>Outcome</th><th>Summary</th></tr>
+      ${calls.map((k) => `<tr><td>${esc(k.name || '—')}<div class="muted">${esc(k.mobile)} · ${esc(k.city || '')}</div></td><td>${segPill(k.segment)}</td><td>${esc(k.status)}</td><td>${k.outcome ? `<span class="pill ${k.outcome === 'INTERESTED' ? 'ok' : ['WRONG_NUMBER', 'DO_NOT_CALL'].includes(k.outcome) ? 'bad' : ''}">${esc(k.outcome.replace('_', ' '))}</span>` : '—'}</td><td class="muted">${esc(k.summary || '')}</td></tr>`).join('')}</table>
+      ${calls[0] ? `<p class="muted" style="margin-top:12px">Opening line: “${esc(calls[0].first_message)}”</p>` : ''}</div>`;
+    $('callBox').scrollIntoView({ behavior: 'smooth' });
+  });
+};
+
+let oStatus = '';
+views.orders = async () => {
+  const { orders } = await api(`/api/admin/orders${oStatus ? `?status=${oStatus}` : ''}`);
+  $('main').innerHTML = `<h2>Orders</h2>
+  <div class="panel"><div class="row"><div style="flex:0;min-width:200px"><select id="os"><option value="">All</option>${['PLACED', 'SENT_TO_DMS', 'FAILED', 'CANCELLED'].map((x) => `<option ${x === oStatus ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+  <div class="muted">Dealers order on WhatsApp (send <b>order</b>). Orders go to Korvo for approval; when Korvo delivers them, purchase points are added automatically.</div></div></div>
+  <div class="panel"><table><tr><th>Order</th><th>Dealer</th><th>Items</th><th class="num">Value</th><th>Status</th><th>DMS ref</th><th></th></tr>
+  ${orders.map((o) => `<tr><td><b>${esc(o.order_no)}</b><div class="muted">${dt(o.placed_at || o.created_at)}</div></td><td>${esc(o.participant_name || '—')}<div class="muted">${esc(o.mobile)} · ${esc(o.city || '')}</div></td>
+    <td class="muted">${o.items.map((i) => `${esc(i.name)} × ${i.qty}`).join('<br>')}</td><td class="num">${inr(o.total_paise)}</td>
+    <td><span class="pill ${o.status === 'SENT_TO_DMS' ? 'ok' : o.status === 'FAILED' ? 'bad' : o.status === 'PLACED' ? 'warn' : ''}">${esc(o.status.replace(/_/g, ' '))}</span>${o.error ? `<div class="muted">${esc(o.error)}</div>` : ''}</td>
+    <td>${esc(o.dms_order_ref || '—')}</td>
+    <td>${['FAILED', 'PLACED'].includes(o.status) ? `<button class="sm" data-retry="${o.id}">Retry</button> <button class="sm" data-ack="${o.id}">Mark processed</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">No orders yet.</td></tr>'}</table></div>`;
+  $('os').onchange = () => { oStatus = $('os').value; render(); };
+  document.querySelectorAll('[data-retry]').forEach((b) => b.onclick = async () => { try { await api(`/api/admin/orders/${b.dataset.retry}/retry`, { method: 'POST' }); } catch (e) { alert(e.message); } render(); });
+  document.querySelectorAll('[data-ack]').forEach((b) => b.onclick = async () => { const ref = prompt('Your order number for this order:'); if (!ref) return; await api(`/api/admin/orders/${b.dataset.ack}/ack`, { method: 'POST', body: { ref } }); render(); });
+};
+
+views.campaigns = async () => {
+  const [{ campaigns }, { schemes }] = await Promise.all([api('/api/admin/wa-campaigns'), api('/api/admin/schemes')]);
+  $('main').innerHTML = `<h2>WhatsApp campaigns</h2>
+  <div class="panel"><h3>New campaign</h3><p class="muted">Uses a template approved in Meta Business Manager. People who sent STOP are never included. Placeholders: <code>{name}</code> <code>{balance}</code> <code>{brand}</code> <code>{scheme_progress}</code> <code>{app_link}</code></p>
+    <div class="row"><div><label>Name</label><input id="wName" placeholder="Diwali scheme launch"></div><div><label>Template name (Meta)</label><input id="wTpl" placeholder="scheme_launch_v1"></div><div><label>Language code</label><input id="wLang" value="hi"></div></div>
+    <div class="row"><div><label>Template body params, one per line ({{1}}, {{2}}…)</label><textarea id="wParams" rows="3">{name}\n{scheme_progress}</textarea></div><div><label>Preview text (shown in the message log)</label><textarea id="wPrev" rows="3">Namaste {name}! {scheme_progress}</textarea></div></div>
+    <div class="row"><div><label>Segments</label>${multi('wSeg', SEGS, 5)}</div><div><label>Types</label>${multi('wTypes', PT, 5)}</div>
+      <div><label>Only people in scheme</label><select id="wScheme"><option value="">—</option>${schemes.filter((x) => x.status === 'ACTIVE').map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></div></div>
+    <button class="p" id="wCreate" style="margin-top:12px">Create &amp; send</button><div class="err" id="wErr"></div></div>
+  <div class="panel"><table><tr><th>Campaign</th><th>Template</th><th>Status</th><th class="num">Queued</th><th class="num">Sent</th><th class="num">Delivered</th><th class="num">Read</th><th class="num">Failed</th><th></th></tr>
+  ${campaigns.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="muted">${esc([c.segments.join(', '), c.participant_types.join(', ')].filter(Boolean).join(' · ') || 'Everyone')}</div></td><td><code>${esc(c.template_name)}</code></td>
+    <td><span class="pill ${c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : ''}">${c.status}</span></td>
+    ${['QUEUED', 'SENT', 'DELIVERED', 'READ', 'FAILED'].map((k) => `<td class="num">${num(c.stats[k] || 0)}</td>`).join('')}
+    <td>${['DRAFT', 'RUNNING'].includes(c.status) ? `<button class="sm danger" data-wcancel="${c.id}">Stop</button>` : ''}</td></tr>`).join('')}</table></div>`;
+  $('wCreate').onclick = async () => {
+    try {
+      const { campaign } = await api('/api/admin/wa-campaigns', { method: 'POST', body: { name: $('wName').value, templateName: $('wTpl').value, language: $('wLang').value, params: $('wParams').value.split('\n').map((x) => x.trim()).filter(Boolean), previewText: $('wPrev').value || undefined, segments: sel('wSeg'), participantTypes: sel('wTypes'), schemeId: $('wScheme').value || undefined } });
+      const r = await api(`/api/admin/wa-campaigns/${campaign.id}/launch`, { method: 'POST' });
+      await api('/api/admin/wa-campaigns/run', { method: 'POST' });
+      alert(`${r.queued} recipients · ${r.skipped.optedOut} skipped (sent STOP)`); render();
+    } catch (e) { $('wErr').textContent = e.message; }
+  };
+  document.querySelectorAll('[data-wcancel]').forEach((b) => b.onclick = async () => { await api(`/api/admin/wa-campaigns/${b.dataset.wcancel}/cancel`, { method: 'POST' }); render(); });
 };

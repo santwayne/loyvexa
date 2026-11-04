@@ -141,6 +141,9 @@ export async function processInvoice(db, { tenant, settings, invoiceId, particip
     });
   }
   await db.query(`UPDATE invoices SET status='PROCESSED', participant_id=$2, base_points=$3, processed_at=now() WHERE id=$1`, [inv.id, participant.id, points]);
+  if (inv.doc_type === 'INVOICE') {
+    await db.query(`UPDATE participants SET last_purchase_at = GREATEST(coalesce(last_purchase_at, '-infinity'), $2::date::timestamptz) WHERE id=$1`, [participant.id, inv.invoice_date]);
+  }
   await emit(db, inv.tenant_id, 'purchase.recorded', { invoiceId: inv.id, participantId: participant.id, docType: inv.doc_type, totalPaise: Number(inv.total_paise), points });
   return { points };
 }

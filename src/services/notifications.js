@@ -23,6 +23,14 @@ const BUILDERS = {
   'purchase.recorded': async (e, p) => (e.payload.points === 0 ? null : e.payload.points > 0
     ? { text: `🧾 Aapki purchase ${rupee(e.payload.totalPaise)} record ho gayi. *+${e.payload.points} points* mile.`, params: [p.name || '', rupee(e.payload.totalPaise), String(e.payload.points)] }
     : { text: `🧾 Return ${rupee(e.payload.totalPaise)} record hua. ${Math.abs(e.payload.points)} points adjust kiye gaye.`, params: [p.name || '', rupee(e.payload.totalPaise), String(e.payload.points)] }),
+  // params: {{1}} order no, {{2}} DMS ref, {{3}} amount
+  'order.sent': async (e) => ({ text: `📦 Order *${e.payload.orderNo}* brand ko mil gaya${e.payload.ref ? ` (ref ${e.payload.ref})` : ''}. Total ${rupee(e.payload.totalPaise)}. Approval ke baad dispatch hoga.`, params: [e.payload.orderNo, e.payload.ref || '', rupee(e.payload.totalPaise)] }),
+  // params: {{1}} order no
+  'order.failed': async (e) => ({ text: `⚠️ Order *${e.payload.orderNo}* brand tak nahi pahuncha. Brand team aapse sampark karegi.`, params: [e.payload.orderNo] }),
+  // params: {{1}} name, {{2}} points, {{3}} days
+  'points.expiring': async (e, p) => ({ text: `⏳ ${p.name ? `${p.name}, ` : ''}aapke *${Number(e.payload.points).toLocaleString('en-IN')} points* agle ${e.payload.withinDays} din mein expire ho jayenge. Abhi UPI mein nikaal lo.`, params: [p.name || '', String(e.payload.points), String(e.payload.withinDays)] }),
+  // params: {{1}} name, {{2}} points
+  'points.expired': async (e, p) => ({ text: `${Number(e.payload.points).toLocaleString('en-IN')} purane points expire ho gaye.`, params: [p.name || '', String(e.payload.points)] }),
   // params: {{1}} name, {{2}} brand ; button: app link suffix
   'participant.created': async (e, p, tenant) => (e.payload.source === 'self_signup' ? null
     : { text: `Namaste${p.name ? ` ${p.name}` : ''} 🙏 *${tenant.name} Rewards* mein aapka swagat hai!\nHar purchase aur har scan pe points milenge.\nApp: ${appLink(tenant)}\nKuch bhi poochna ho toh yahan *menu* likho.`, params: [p.name || '', tenant.name] }),

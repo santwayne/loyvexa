@@ -26,6 +26,7 @@ const endpoints = () => ({
 const connectorConfig = z.object({
   earnPurchasePoints: z.boolean().optional(),
   earnOn: z.enum(['approved', 'delivered']).optional(),
+  allowTokenExchange: z.boolean().optional(),
   columns: z.record(z.string(), z.array(z.string())).optional(),
 }).optional();
 
