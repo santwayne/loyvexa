@@ -55,6 +55,7 @@ const productSchema = z.object({
     .refine((o) => Object.keys(o).every((k) => PTYPES.includes(k)), 'Unknown participant type').optional(),
   active: z.boolean().optional(), externalRef: z.string().optional(),
   purchasePointsPerUnit: z.number().nonnegative().nullable().optional(),
+  pricePaise: z.number().int().nonnegative().nullable().optional(),
 });
 r.get('/products', ah(async (req, res) => {
   const { rows } = await query(`
@@ -67,9 +68,9 @@ r.post('/products', adminOnly, ah(async (req, res) => {
   const b = parse(productSchema, req.body);
   try {
     const { rows: [p] } = await query(
-      `INSERT INTO products (tenant_id, sku, name, category, mrp_paise, points, points_by_type, active, external_ref, purchase_points_per_unit)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,coalesce($8,true),$9,$10) RETURNING *`,
-      [req.tenantId, b.sku, b.name, b.category, b.mrpPaise, b.points, b.pointsByType || {}, b.active, b.externalRef, b.purchasePointsPerUnit ?? null]);
+      `INSERT INTO products (tenant_id, sku, name, category, mrp_paise, points, points_by_type, active, external_ref, purchase_points_per_unit, price_paise)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,coalesce($8,true),$9,$10,$11) RETURNING *`,
+      [req.tenantId, b.sku, b.name, b.category, b.mrpPaise, b.points, b.pointsByType || {}, b.active, b.externalRef, b.purchasePointsPerUnit ?? null, b.pricePaise ?? null]);
     res.status(201).json({ product: p });
   } catch (e) { if (e.code === '23505') throw conflict('SKU_EXISTS', 'SKU already exists'); throw e; }
 }));
@@ -78,10 +79,11 @@ r.patch('/products/:id', adminOnly, ah(async (req, res) => {
   const { rows: [p] } = await query(
     `UPDATE products SET name=coalesce($3,name), category=coalesce($4,category), mrp_paise=coalesce($5,mrp_paise),
        points=coalesce($6,points), points_by_type=coalesce($7,points_by_type), active=coalesce($8,active),
-       purchase_points_per_unit = CASE WHEN $9 THEN $10 ELSE purchase_points_per_unit END
+       purchase_points_per_unit = CASE WHEN $9 THEN $10 ELSE purchase_points_per_unit END,
+       price_paise = CASE WHEN $11 THEN $12 ELSE price_paise END
      WHERE id=$1 AND tenant_id=$2 RETURNING *`,
     [req.params.id, req.tenantId, b.name, b.category, b.mrpPaise, b.points, b.pointsByType ? JSON.stringify(b.pointsByType) : null, b.active,
-      b.purchasePointsPerUnit !== undefined, b.purchasePointsPerUnit ?? null]);
+      b.purchasePointsPerUnit !== undefined, b.purchasePointsPerUnit ?? null, b.pricePaise !== undefined, b.pricePaise ?? null]);
   if (!p) throw notFound('Product');
   res.json({ product: p });
 }));
@@ -132,10 +134,11 @@ r.get('/participants', ah(async (req, res) => {
   const where = ['p.tenant_id=$1'];
   if (req.query.type) { params.push(req.query.type); where.push(`p.type=$${params.length}`); }
   if (req.query.status) { params.push(req.query.status); where.push(`p.status=$${params.length}`); }
+  if (req.query.segment) { params.push(req.query.segment); where.push(`p.segment=$${params.length}`); }
   if (req.query.q) { params.push(`%${req.query.q}%`); where.push(`(p.name ILIKE $${params.length} OR p.mobile ILIKE $${params.length} OR p.city ILIKE $${params.length})`); }
   params.push(limit, offset);
   const { rows } = await query(`
-    SELECT p.id, p.type, p.name, p.mobile, p.city, p.state, p.status, p.upi_id, p.last_scan_at, p.created_at, p.external_ref,
+    SELECT p.id, p.type, p.name, p.mobile, p.city, p.state, p.status, p.upi_id, p.last_scan_at, p.last_purchase_at, p.created_at, p.external_ref, p.segment, p.dnd, p.wa_opt_out,
            coalesce(w.balance,0) AS balance, coalesce(w.lifetime_earned,0) AS lifetime_earned, count(*) OVER() AS total
       FROM participants p LEFT JOIN wallets w ON w.participant_id=p.id
      WHERE ${where.join(' AND ')} ORDER BY p.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
@@ -251,7 +254,10 @@ r.get('/dashboard', ah(async (req, res) => {
         (SELECT count(*) FROM fraud_flags WHERE tenant_id=$1 AND status='OPEN') AS open_fraud_flags,
         (SELECT count(*) FROM invoices WHERE tenant_id=$1 AND status='UNMATCHED') AS unmatched_invoices,
         (SELECT coalesce(sum(CASE WHEN doc_type='CREDIT_NOTE' THEN -total_paise ELSE total_paise END),0) FROM invoices WHERE tenant_id=$1 AND status='PROCESSED' AND invoice_date > current_date - 30) AS purchase_paise_30d,
-        (SELECT count(*) FROM schemes WHERE tenant_id=$1 AND status='ACTIVE' AND ends_at > now()) AS active_schemes`, [t]),
+        (SELECT count(*) FROM schemes WHERE tenant_id=$1 AND status='ACTIVE' AND ends_at > now()) AS active_schemes,
+        (SELECT count(*) FROM participants WHERE tenant_id=$1 AND segment IN ('AT_RISK','DORMANT')) AS at_risk,
+        (SELECT count(*) FROM orders WHERE tenant_id=$1 AND status IN ('PLACED','FAILED')) AS orders_waiting,
+        (SELECT coalesce(sum(total_paise),0) FROM orders WHERE tenant_id=$1 AND status IN ('PLACED','SENT_TO_DMS') AND placed_at > now() - interval '30 days') AS wa_orders_paise_30d`, [t]),
     query(`SELECT type, count(*) AS n, count(*) FILTER (WHERE last_scan_at > now() - interval '30 days') AS active FROM participants WHERE tenant_id=$1 GROUP BY type ORDER BY n DESC`, [t]),
     query(`SELECT d::date AS day, coalesce(s.n,0) AS scans, coalesce(s.pts,0) AS points
              FROM generate_series(date_trunc('day', now()) - make_interval(days => $2 - 1), date_trunc('day', now()), interval '1 day') d

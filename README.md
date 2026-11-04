@@ -197,3 +197,31 @@ Console → WhatsApp has a **bot simulator**, so you can demo everything before 
 1. Get each brand's WhatsApp number approved in Meta Business Manager. Create the templates (OTP, payout, scheme bonus, purchase receipt), set `WHATSAPP_SEND_MODE=live`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` and `ENCRYPTION_KEY`.
 2. Check the adapters against **real exports** from each client's Tally/Busy/Marg/Zoho before trusting the points. Column names and Tally TDL fields vary by setup.
 3. Decide each brand's single purchase source (Royal or accounting software).
+
+---
+
+# Phase 3: Segments, AI calls, WhatsApp ordering, campaigns, expiry
+
+Demo data: `npm run seed:demo && npm run seed:demo2 && npm run seed:demo3`. Tests: `npm run test:e2e3` (21 checks; server running with mock WhatsApp, calls and DMS).
+
+| Feature | What it does | Where |
+|---|---|---|
+| Segmentation | NEW / REGULAR / HIGH_SPENDER / AT_RISK / DORMANT per participant. Dealers are scored on purchases, mechanics on scans. Hourly in the worker, with history and a `segment.changed` event. Thresholds are brand settings | `services/segments.js`, Console → Segments |
+| AI call campaigns | Pick segment, type and city, then a script (win-back, scheme reminder, feedback) in Hindi, Punjabi or English. Personalised with name, balance and scheme progress. Calling hours only, DND respected, max one call per person per 7 days. Outcomes come back by webhook; a `DO_NOT_CALL` outcome sets DND. Calls never touch points | `services/calls/`, `POST /api/webhooks/calls/:provider`, Console → AI calls |
+| WhatsApp ordering | Dealer sends `order` (or `4`), gets the priced catalog, replies `1 20`, `cart`, `confirm`. The worker pushes the order to Korvo (`orderDms`: `korvo` / `mock` / `none`). Korvo's delivered webhook then awards purchase points | `services/orders.js`, `services/dms/`, Console → Orders |
+| Korvo two-way | Product master sync `POST /api/connect/products`; dealer token exchange `POST /api/connect/participant-token` for the Rewards tab inside Korvo. Spec for the Korvo-side work: `docs/korvo-integration.md` | `routes/connect.js` |
+| WhatsApp campaigns | Approved template to a segment, type or scheme audience. Placeholders `{name} {balance} {brand} {scheme_progress} {app_link}`. Per-tick and per-day caps. `STOP` / `START` honoured. Delivery receipts update sent → delivered → read and never move backwards | `services/campaigns.js`, Console → Campaigns |
+| Points expiry | `pointsExpiryMonths` (0 = off), FIFO: debits use the oldest points first. Reminder `expiryReminderDays` before, at most weekly. Idempotent per day | `services/expiry.js` |
+
+New brand settings: `segNewDays`, `segAtRiskDays`, `segDormantDays`, `segHighValuePoints90d`, `callHoursStart`, `callHoursEnd`, `callCooldownDays`, `orderDms`, `orderEnabledTypes`, `waCampaignPerTick`, `waCampaignDailyCap`, `pointsExpiryMonths`, `expiryReminderDays`.
+
+New env: `CALL_PROVIDER` (`mock` | `waynering`), `WAYNERING_BASE_URL`, `WAYNERING_API_KEY`, `CALL_WEBHOOK_SECRET`, `KORVO_BASE_URL`, `KORVO_API_KEY`.
+
+## Before going live (Phase 3)
+1. **WayneRing:** confirm the outbound-call endpoint and webhook fields against `services/calls/providers.js` (the contract there is a proposal), and get the TRAI 140-series number with DLT registration.
+2. **Korvo:** build the 4 items in `docs/korvo-integration.md` (webhook, master sync, external order endpoint, Rewards tab).
+3. **WhatsApp:** approve templates for campaigns, `order.sent`, `points.expiring` and `points.expired`.
+4. **Expiry:** decide the policy per brand and tell participants before switching it on. Expiring earned points needs clear programme terms.
+
+## Not built yet (next)
+Rewards catalog (gifts and vouchers alongside UPI), mechanic KYC (PAN for TDS), Punjabi (Gurmukhi) UI in the PWA.

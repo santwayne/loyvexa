@@ -13,6 +13,7 @@ import publicRoutes from './routes/public.js';
 import connectRoutes from './routes/connect.js';
 import whatsappRoutes from './routes/whatsapp.js';
 import admin2Routes from './routes/admin2.js';
+import admin3Routes from './routes/admin3.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -41,6 +42,7 @@ export function createApp() {
   app.use('/api', platformRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/admin', admin2Routes);
+  app.use('/api/admin', admin3Routes);
   app.use('/api/whatsapp', whatsappRoutes);
   app.use('/api/p', participantRoutes);
   app.use(publicRoutes);
