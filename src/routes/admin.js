@@ -54,6 +54,7 @@ const productSchema = z.object({
   pointsByType: z.record(z.string(), z.number().int().nonnegative())
     .refine((o) => Object.keys(o).every((k) => PTYPES.includes(k)), 'Unknown participant type').optional(),
   active: z.boolean().optional(), externalRef: z.string().optional(),
+  purchasePointsPerUnit: z.number().nonnegative().nullable().optional(),
 });
 r.get('/products', ah(async (req, res) => {
   const { rows } = await query(`
@@ -66,9 +67,9 @@ r.post('/products', adminOnly, ah(async (req, res) => {
   const b = parse(productSchema, req.body);
   try {
     const { rows: [p] } = await query(
-      `INSERT INTO products (tenant_id, sku, name, category, mrp_paise, points, points_by_type, active, external_ref)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,coalesce($8,true),$9) RETURNING *`,
-      [req.tenantId, b.sku, b.name, b.category, b.mrpPaise, b.points, b.pointsByType || {}, b.active, b.externalRef]);
+      `INSERT INTO products (tenant_id, sku, name, category, mrp_paise, points, points_by_type, active, external_ref, purchase_points_per_unit)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,coalesce($8,true),$9,$10) RETURNING *`,
+      [req.tenantId, b.sku, b.name, b.category, b.mrpPaise, b.points, b.pointsByType || {}, b.active, b.externalRef, b.purchasePointsPerUnit ?? null]);
     res.status(201).json({ product: p });
   } catch (e) { if (e.code === '23505') throw conflict('SKU_EXISTS', 'SKU already exists'); throw e; }
 }));
@@ -76,9 +77,11 @@ r.patch('/products/:id', adminOnly, ah(async (req, res) => {
   const b = parse(productSchema.partial(), req.body);
   const { rows: [p] } = await query(
     `UPDATE products SET name=coalesce($3,name), category=coalesce($4,category), mrp_paise=coalesce($5,mrp_paise),
-       points=coalesce($6,points), points_by_type=coalesce($7,points_by_type), active=coalesce($8,active)
+       points=coalesce($6,points), points_by_type=coalesce($7,points_by_type), active=coalesce($8,active),
+       purchase_points_per_unit = CASE WHEN $9 THEN $10 ELSE purchase_points_per_unit END
      WHERE id=$1 AND tenant_id=$2 RETURNING *`,
-    [req.params.id, req.tenantId, b.name, b.category, b.mrpPaise, b.points, b.pointsByType ? JSON.stringify(b.pointsByType) : null, b.active]);
+    [req.params.id, req.tenantId, b.name, b.category, b.mrpPaise, b.points, b.pointsByType ? JSON.stringify(b.pointsByType) : null, b.active,
+      b.purchasePointsPerUnit !== undefined, b.purchasePointsPerUnit ?? null]);
   if (!p) throw notFound('Product');
   res.json({ product: p });
 }));
@@ -245,7 +248,10 @@ r.get('/dashboard', ah(async (req, res) => {
         (SELECT coalesce(sum(balance+held),0) FROM wallets WHERE tenant_id=$1) AS points_liability,
         (SELECT coalesce(sum(amount_paise),0) FROM redemptions WHERE tenant_id=$1 AND status='PAID') AS paid_paise,
         (SELECT count(*) FROM redemptions WHERE tenant_id=$1 AND status='REQUESTED') AS pending_redemptions,
-        (SELECT count(*) FROM fraud_flags WHERE tenant_id=$1 AND status='OPEN') AS open_fraud_flags`, [t]),
+        (SELECT count(*) FROM fraud_flags WHERE tenant_id=$1 AND status='OPEN') AS open_fraud_flags,
+        (SELECT count(*) FROM invoices WHERE tenant_id=$1 AND status='UNMATCHED') AS unmatched_invoices,
+        (SELECT coalesce(sum(CASE WHEN doc_type='CREDIT_NOTE' THEN -total_paise ELSE total_paise END),0) FROM invoices WHERE tenant_id=$1 AND status='PROCESSED' AND invoice_date > current_date - 30) AS purchase_paise_30d,
+        (SELECT count(*) FROM schemes WHERE tenant_id=$1 AND status='ACTIVE' AND ends_at > now()) AS active_schemes`, [t]),
     query(`SELECT type, count(*) AS n, count(*) FILTER (WHERE last_scan_at > now() - interval '30 days') AS active FROM participants WHERE tenant_id=$1 GROUP BY type ORDER BY n DESC`, [t]),
     query(`SELECT d::date AS day, coalesce(s.n,0) AS scans, coalesce(s.pts,0) AS points
              FROM generate_series(date_trunc('day', now()) - make_interval(days => $2 - 1), date_trunc('day', now()), interval '1 day') d

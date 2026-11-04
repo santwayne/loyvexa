@@ -14,5 +14,12 @@ services:
       DATABASE_URL: postgres://loyvexa:loyvexa@db:5432/loyvexa
     ports: ["4000:4000"]
     depends_on: [db]
+  worker:
+    build: .
+    command: ["node", "src/worker.js"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://loyvexa:loyvexa@db:5432/loyvexa
+    depends_on: [db]
 volumes:
   pgdata:

@@ -4,6 +4,7 @@ import { settingsOf } from './tenants.js';
 import { preScanChecks, afterInvalidScan, flag } from './fraud.js';
 import * as ledger from './ledger.js';
 import { emit } from './events.js';
+import { applyScanMultiplier } from './schemes.js';
 
 const MESSAGES = {
   INVALID: 'This code is not valid. The product may not be genuine.',
@@ -73,15 +74,17 @@ export async function scan({ tenant, participantId, input, lat = null, lng = nul
       tenantId: tenant.id, participantId, type: 'EARN_SCAN', points,
       refType: 'qr_code', refId: String(qr.id), note: `${qr.product_name} (${qr.sku})`,
     });
+    const multi = await applyScanMultiplier(db, { tenantId: tenant.id, participant, qr, basePoints: points });
+    const finalWallet = multi ? await ledger.getWallet(db, participantId) : wallet;
     await db.query(`UPDATE participants SET last_scan_at = now() WHERE id = $1`, [participantId]);
     await record('SUCCESS');
-    await emit(db, tenant.id, 'scan.succeeded', { participantId, code, productId: qr.product_id, sku: qr.sku, points, lat, lng });
+    await emit(db, tenant.id, 'scan.succeeded', { participantId, code, productId: qr.product_id, sku: qr.sku, product: qr.product_name, points, bonus: multi?.bonus || 0, lat, lng });
 
     return {
-      ok: true, result: 'SUCCESS', points,
+      ok: true, result: 'SUCCESS', points, bonus: multi ? { points: multi.bonus, scheme: multi.name, multiplier: multi.multiplier } : null,
       product: { name: qr.product_name, sku: qr.sku },
-      wallet: { balance: wallet.balance, held: wallet.held, lifetimeEarned: wallet.lifetime_earned },
-      message: `+${points} points for ${qr.product_name}`,
+      wallet: { balance: finalWallet.balance, held: finalWallet.held, lifetimeEarned: finalWallet.lifetime_earned },
+      message: `+${points + (multi?.bonus || 0)} points for ${qr.product_name}`,
     };
   });
 }

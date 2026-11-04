@@ -14,6 +14,14 @@ export const config = {
   payoutProvider: process.env.PAYOUT_PROVIDER || 'mock',
   otpRateLimitPerMinute: Number(process.env.OTP_RATE_LIMIT_PER_MINUTE || 10),
   verifyRateLimitPerMinute: Number(process.env.VERIFY_RATE_LIMIT_PER_MINUTE || 30),
+  encryptionKey: process.env.ENCRYPTION_KEY || 'dev-only-encryption-key',
+  whatsapp: {
+    sendMode: process.env.WHATSAPP_SEND_MODE || 'mock', // mock | live
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || 'dev-verify-token',
+    appSecret: process.env.WHATSAPP_APP_SECRET || '',     // enables X-Hub-Signature-256 check
+    graphVersion: process.env.WHATSAPP_GRAPH_VERSION || 'v21.0',
+  },
+  workerIntervalMs: Number(process.env.WORKER_INTERVAL_MS || 15000),
   corsOrigins: (process.env.CORS_ORIGINS || '*').split(',').map((s) => s.trim()),
 };
 
@@ -31,9 +39,14 @@ export const DEFAULT_TENANT_SETTINGS = {
   maxParticipantsPerDevice: 3,
   allowSelfSignup: true,
   selfSignupTypes: ['MECHANIC', 'ELECTRICIAN', 'PLUMBER', 'CONTRACTOR', 'PAINTER', 'CARPENTER', 'RETAILER'],
+  // Purchase-based earning from invoices (accounting / DMS connectors)
+  purchaseEarnEnabled: true,
+  purchasePointsPer1000: 10,     // 10 points per ₹1,000 taxable value (unless product overrides per unit)
+  purchaseEarnTypes: ['DEALER', 'DISTRIBUTOR', 'RETAILER'],
 };
 
 if (process.env.NODE_ENV === 'production') {
   if (config.jwtSecret === 'dev-only-change-me') throw new Error('JWT_SECRET must be set in production');
   if (config.otpDevMode) throw new Error('OTP_DEV_MODE must be false in production');
+  if (config.encryptionKey === 'dev-only-encryption-key') throw new Error('ENCRYPTION_KEY must be set in production');
 }

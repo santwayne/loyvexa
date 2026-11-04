@@ -3,6 +3,7 @@ import { query } from '../db/pool.js';
 import { sha256 } from '../lib/codes.js';
 import { config } from '../config.js';
 import { badRequest, AppError } from '../lib/errors.js';
+import { channelForTenant, sendTemplate } from './whatsapp.js';
 
 const TTL_MIN = 10;
 const MAX_ATTEMPTS = 5;
@@ -11,10 +12,13 @@ const MAX_ATTEMPTS = 5;
  * Sends OTP. Phase 1: dev mode returns it in the response.
  * Phase 2: plug in WhatsApp Cloud API (reuse Regulars sender) with an authentication template.
  */
-async function deliver({ mobile, code }) {
+async function deliver({ tenantId, mobile, code }) {
   if (config.otpDevMode) return;
-  // TODO(phase2): WhatsApp authentication template via Regulars' WhatsApp Cloud API client
-  console.log(`[otp] would send OTP to ${mobile}`);
+  // WhatsApp "Authentication" category template with one body param {{1}} = code and a copy-code button.
+  const channel = await channelForTenant(tenantId);
+  const tpl = channel?.config?.otpTemplate;
+  if (!tpl) throw new AppError(503, 'OTP_CHANNEL_MISSING', 'OTP delivery is not configured for this brand yet');
+  await sendTemplate({ tenantId, to: mobile, name: tpl.name || tpl, language: tpl.language || 'en', params: [code], buttonParam: code, previewText: '[OTP sent]' });
 }
 
 export async function requestOtp({ tenantId, mobile }) {
@@ -24,7 +28,7 @@ export async function requestOtp({ tenantId, mobile }) {
   const code = String(crypto.randomInt(100000, 1000000));
   await query(`INSERT INTO otp_codes (tenant_id, mobile, code_hash, expires_at) VALUES ($1,$2,$3, now() + make_interval(mins => $4))`,
     [tenantId, mobile, sha256(`${mobile}:${code}`), TTL_MIN]);
-  await deliver({ mobile, code });
+  await deliver({ tenantId, mobile, code });
   return config.otpDevMode ? { sent: true, devOtp: code } : { sent: true };
 }
 
