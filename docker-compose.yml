@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: loyvexa
+      POSTGRES_PASSWORD: loyvexa
+      POSTGRES_DB: loyvexa
+    volumes: [pgdata:/var/lib/postgresql/data]
+    ports: ["5432:5432"]
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://loyvexa:loyvexa@db:5432/loyvexa
+    ports: ["4000:4000"]
+    depends_on: [db]
+volumes:
+  pgdata:

@@ -1,0 +1,9 @@
+{
+  "name": "Rewards",
+  "short_name": "Rewards",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f4f1",
+  "theme_color": "#E85D04",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
