@@ -7,7 +7,7 @@ import { badRequest, conflict } from '../lib/errors.js';
  * opts.hold:   also move |points| into wallets.held (for redemption holds)
  * opts.release: move |points| out of held back to balance
  */
-export async function post(db, { tenantId, participantId, type, points, refType = null, refId = null, note = null, createdBy = null, hold = false, release = false, settleHeld = 0 }) {
+export async function post(db, { tenantId, participantId, type, points, refType = null, refId = null, note = null, createdBy = null, hold = false, release = false, settleHeld = 0, allowNegative = false }) {
   if (!Number.isInteger(points)) throw badRequest('INVALID_POINTS', 'Points must be an integer');
 
   const { rows } = await db.query(`SELECT * FROM wallets WHERE participant_id = $1 FOR UPDATE`, [participantId]);
@@ -21,7 +21,7 @@ export async function post(db, { tenantId, participantId, type, points, refType 
   }
 
   const newBalance = w.balance + points;
-  if (newBalance < 0) throw conflict('INSUFFICIENT_POINTS', 'Not enough points', { balance: w.balance, requested: -points });
+  if (newBalance < 0 && !(allowNegative || points >= 0)) throw conflict('INSUFFICIENT_POINTS', 'Not enough points', { balance: w.balance, requested: -points });
 
   let held = w.held;
   if (hold) held += Math.abs(points);
@@ -29,7 +29,7 @@ export async function post(db, { tenantId, participantId, type, points, refType 
   if (settleHeld) held -= settleHeld;
   if (held < 0) throw conflict('HELD_UNDERFLOW', 'Held points mismatch');
 
-  const earned = points > 0 && ['EARN_SCAN', 'BONUS', 'ADJUST_CREDIT'].includes(type) ? points : 0;
+  const earned = points > 0 && ['EARN_SCAN', 'BONUS', 'ADJUST_CREDIT', 'PURCHASE_EARN', 'SCHEME_BONUS'].includes(type) ? points : 0;
 
   if (points !== 0) {
     try {

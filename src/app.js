@@ -10,6 +10,9 @@ import platformRoutes from './routes/platform.js';
 import adminRoutes from './routes/admin.js';
 import participantRoutes from './routes/participant.js';
 import publicRoutes from './routes/public.js';
+import connectRoutes from './routes/connect.js';
+import whatsappRoutes from './routes/whatsapp.js';
+import admin2Routes from './routes/admin2.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -29,12 +32,16 @@ export function createApp() {
     },
   }));
   app.use(cors({ origin: config.corsOrigins.includes('*') ? true : config.corsOrigins }));
+  // Accounting/DMS push API has its own body parsers (JSON, XML, CSV; up to 20 MB)
+  app.use('/api/connect', connectRoutes);
   app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
   if (process.env.NODE_ENV !== 'test') app.use(morgan('tiny'));
 
   app.get('/health', (_req, res) => res.json({ ok: true, product: config.productName }));
   app.use('/api', platformRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/admin', admin2Routes);
+  app.use('/api/whatsapp', whatsappRoutes);
   app.use('/api/p', participantRoutes);
   app.use(publicRoutes);
   app.use('/app', express.static(path.join(root, 'public', 'app')));

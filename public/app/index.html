@@ -39,6 +39,9 @@
   .camBar input { background:#fff } .camBar button { margin:0 }
   .result { text-align:center } .result .big { font-size:56px } .result h3 { margin:6px 0; font-size:22px }
   .hidden { display:none !important }
+  .tabs button { font-size:13px; padding:10px 4px }
+  .scheme { padding:12px 0; border-bottom:1px solid #f0f0f0 } .scheme:last-child { border-bottom:0 }
+  .bar { height:8px; background:#eee; border-radius:6px; margin:8px 0; overflow:hidden } .bar div { height:100%; background:var(--brand) }
 </style>
 </head>
 <body>
@@ -80,10 +83,12 @@
     </div>
     <div class="tabs">
       <button class="on" data-tab="hist" data-t="history"></button>
+      <button data-tab="schemes" data-t="schemes"></button>
       <button data-tab="redeem" data-t="redeem"></button>
       <button data-tab="profile" data-t="profile"></button>
     </div>
     <div id="tHist" class="card"><div id="ledger"></div></div>
+    <div id="tSchemes" class="card hidden"><div id="schemeList"></div></div>
     <div id="tRedeem" class="card hidden">
       <h2 data-t="redeemTitle"></h2>
       <label data-t="upi"></label><input id="upi" placeholder="name@okaxis" autocapitalize="off">

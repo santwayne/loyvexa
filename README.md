@@ -119,3 +119,81 @@ A worker will read rows where `delivered_at IS NULL` and send them on:
 4. Payouts: open a RazorpayX (or Cashfree Payouts) account, finish KYC, check the API fields in `payouts/razorpayx.js` against their current docs, and set up the webhook.
 5. Ask a CA about tax/TDS on rewards paid to mechanics.
 6. Daily Postgres backups. The ledger is money.
+
+---
+
+# Phase 2: Schemes, accounting connectors, WhatsApp bot
+
+Run the worker next to the API: `npm run worker` (Docker: the `worker` service). It sends WhatsApp notifications from the outbox and auto-settles schemes.
+
+Demo data: `npm run seed:demo && npm run seed:demo2` (dealers, Tally invoices, 3 live schemes, a mock WhatsApp number).
+Tests: `npm run test:e2e2` (29 checks; server running with `WHATSAPP_SEND_MODE=mock`).
+
+## Not locked to Tally: one canonical invoice format
+
+Every source is converted into one document shape (`src/connectors/adapters.js`). Points and schemes never depend on which software the brand uses.
+
+| Connector type | What it accepts |
+|---|---|
+| `TALLY` | Line-level JSON pushed by a Tally TDL (`vchguid, ledgerguid, itemsku, quantity, amount`, the same format Royal's Tally sync already uses) **or** a Tally XML voucher export |
+| `ZOHO_BOOKS` | Invoice / credit-note webhook payloads |
+| `BUSY`, `MARG`, `CSV` | Sales-register CSV from Busy, Marg, Vyapar, Excel or any other software. Common column names are auto-detected; set `config.columns` to map custom headers. Accepts dates like `01-11-2026`, `1-Nov-26`, `20261101` and amounts like `"10,000.00"` |
+| `ROYAL` | Royal order webhook (`order.delivered` earns; `order.cancelled`/`returned` reverses). `config.earnOn`: `delivered` (default) or `approved` |
+| `GENERIC` | Any software that can POST JSON (format shown in the console) |
+
+Adding another system (SAP B1, Odoo, QuickBooks…) = one function mapping its payload to the canonical document.
+
+**Endpoints** (header `X-Api-Key: lvx_…`, created in Console → Connectors; the key is shown once and stored only as a SHA-256 hash):
+```
+GET  /api/connect/ping
+POST /api/connect/invoices     JSON | application/xml | text/csv   (up to 20 MB, 5,000 docs)
+POST /api/connect/parties      dealer master upsert
+POST /api/connect/royal        Royal order webhook
+```
+
+**Behaviour**
+- Idempotent: the same voucher pushed again is a no-op (`connector + external id + doc type`).
+- Dealer matching: external ref → GSTIN → mobile. An unmatched invoice waits in Console → Invoices. Map it once and the mapping is remembered, so that party's other pending invoices process too.
+- Product matching: SKU → external ref → item name. Unknown items still count towards ₹ value schemes.
+- Purchase points: `purchasePointsPer1000` (brand setting) on taxable value, or `products.purchase_points_per_unit`. Only for `purchaseEarnTypes` (dealer, distributor, retailer by default). `connector.config.earnPurchasePoints: false` records invoices for schemes only.
+- Credit notes reverse points, capped at what the original invoice earned. A wallet can go negative after a return; future earnings net it off, and cash-out still needs a positive balance.
+- ⚠️ Use **one** purchase source per brand (e.g. Royal **or** Tally, not both), otherwise the same sale is counted twice.
+
+## Scheme engine
+
+| Type | Measure | Paid |
+|---|---|---|
+| `PURCHASE_SLAB` | Net purchase ₹ (`AMOUNT`) or units (`QUANTITY`) in the period, after returns | At settlement |
+| `SCAN_TARGET` | Number of scans in the period | At settlement |
+| `SCAN_MULTIPLIER` | Each scan (2x, 3x…), optionally only on chosen products | Instantly |
+
+Slab rewards: `FIXED_POINTS`, `PERCENT` (% of purchase value paid as points), `PER_UNIT`. The highest slab reached wins. AMOUNT slab minimums are in rupees.
+Filters: participant types and products. Invoice dates count by IST calendar day.
+Settlement: automatic once `ends_at + settle_grace_days` has passed (waits for late invoices), or "Settle now" in the console. Running it twice never pays twice. Live leaderboard shows "₹X more to the next slab".
+
+```
+GET  /api/admin/schemes | POST | PATCH /:id (draft only)
+POST /api/admin/schemes/:id/activate | /cancel | /settle {force}
+GET  /api/admin/schemes/:id/leaderboard
+GET  /api/p/schemes                         participant's live progress
+```
+
+## WhatsApp bot
+
+One webhook for all brands, routed by `phone_number_id`: `GET/POST /api/whatsapp/webhook` (verify token + `X-Hub-Signature-256` check when `WHATSAPP_APP_SECRET` is set). Access tokens are stored AES-256-GCM encrypted.
+
+What dealers/mechanics can send (Roman Hinglish by default, `english` switches):
+- `1` / `points` / `balance`: balance in points and ₹
+- `2` / `scheme` / `offer`: every live scheme with progress and "₹X more to the next slab"
+- `3` / `history`: last 5 transactions
+- a product code `ABCD-EFGH-JKMN`: scan-to-earn straight from WhatsApp, with the same fraud rules as the app. Chit-chat is never treated as a code.
+- an unknown number gets the join link
+
+Notifications (worker): payout done/failed, scheme bonus, purchase recorded, welcome for dealers created by sync. Inside Meta's 24-hour window they go as free text. Outside it they need approved templates set in `tenant_channels.config.templates[eventType]` (body params listed in `src/services/notifications.js`). OTP needs an Authentication template (`otpTemplate`).
+
+Console → WhatsApp has a **bot simulator**, so you can demo everything before Meta approves a number.
+
+## Before going live (Phase 2)
+1. Get each brand's WhatsApp number approved in Meta Business Manager. Create the templates (OTP, payout, scheme bonus, purchase receipt), set `WHATSAPP_SEND_MODE=live`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` and `ENCRYPTION_KEY`.
+2. Check the adapters against **real exports** from each client's Tally/Busy/Marg/Zoho before trusting the points. Column names and Tally TDL fields vary by setup.
+3. Decide each brand's single purchase source (Royal or accounting software).

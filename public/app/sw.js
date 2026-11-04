@@ -1,5 +1,5 @@
 // Cache the app shell so it opens instantly on weak networks. API calls always go to network.
-const CACHE = 'wl-shell-v1';
+const CACHE = 'wl-shell-v2';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon.svg'];
 self.addEventListener('install', (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));

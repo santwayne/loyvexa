@@ -12,6 +12,7 @@ import * as ledger from '../services/ledger.js';
 import { requestRedemption, isValidUpi } from '../services/redemption.js';
 import { emit } from '../services/events.js';
 import { config } from '../config.js';
+import { progressFor } from '../services/schemes.js';
 
 const r = Router();
 const otpLimiter = rateLimit({ windowMs: 60_000, limit: config.otpRateLimitPerMinute, standardHeaders: true, legacyHeaders: false });
@@ -88,6 +89,10 @@ r.post('/scan', ah(async (req, res) => {
     deviceId: req.headers['x-device-id']?.toString().slice(0, 100) || null, ip: req.ip,
   });
   res.status(out.ok ? 200 : 422).json(out);
+}));
+
+r.get('/schemes', ah(async (req, res) => {
+  res.json({ schemes: await progressFor({ tenant: req.tenant, participant: req.participant }) });
 }));
 
 r.get('/ledger', ah(async (req, res) => {

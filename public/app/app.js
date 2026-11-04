@@ -21,7 +21,8 @@ const T = {
     },
     types: { MECHANIC: 'मैकेनिक', ELECTRICIAN: 'इलेक्ट्रीशियन', PLUMBER: 'प्लंबर', CONTRACTOR: 'कॉन्ट्रैक्टर', PAINTER: 'पेंटर', CARPENTER: 'कारपेंटर', RETAILER: 'दुकानदार' },
     st: { REQUESTED: 'मंज़ूरी बाकी', PROCESSING: 'प्रोसेसिंग', PAID: 'पेमेंट हो गया', FAILED: 'फेल (पॉइंट्स वापस)', REJECTED: 'रिजेक्ट (पॉइंट्स वापस)' },
-    lt: { EARN_SCAN: 'स्कैन', REDEEM_HOLD: 'पैसे निकाले', REDEEM_RELEASE: 'पॉइंट्स वापस', ADJUST_CREDIT: 'बोनस', ADJUST_DEBIT: 'कटौती', BONUS: 'बोनस', EXPIRE: 'एक्सपायर' },
+    lt: { EARN_SCAN: 'स्कैन', REDEEM_HOLD: 'पैसे निकाले', REDEEM_RELEASE: 'पॉइंट्स वापस', ADJUST_CREDIT: 'बोनस', ADJUST_DEBIT: 'कटौती', BONUS: 'बोनस', EXPIRE: 'एक्सपायर', PURCHASE_EARN: 'खरीद', PURCHASE_REVERSAL: 'रिटर्न', SCHEME_BONUS: 'स्कीम बोनस' },
+    schemes: 'स्कीम्स', noSchemes: 'अभी कोई स्कीम नहीं चल रही।', endsOn: (d) => `आखिरी तारीख: ${d}`, multi: (m) => `हर स्कैन पर ${m}x पॉइंट्स`, slabNow: (l, p) => `✅ ${l} → ${p} पॉइंट्स`, noSlab: 'अभी कोई स्लैब नहीं', toNext: (r, rw) => `अगला स्लैब (${rw}) — सिर्फ ${r} और`, top: '🏆 सबसे ऊपर का स्लैब!',
   },
   en: {
     welcome: 'Welcome 🙏', welcomeSub: 'Scan the QR on every genuine product, earn points, get cash straight to UPI.',
@@ -35,7 +36,8 @@ const T = {
     errs: {},
     types: { MECHANIC: 'Mechanic', ELECTRICIAN: 'Electrician', PLUMBER: 'Plumber', CONTRACTOR: 'Contractor', PAINTER: 'Painter', CARPENTER: 'Carpenter', RETAILER: 'Retailer' },
     st: { REQUESTED: 'Awaiting approval', PROCESSING: 'Processing', PAID: 'Paid', FAILED: 'Failed (points returned)', REJECTED: 'Rejected (points returned)' },
-    lt: { EARN_SCAN: 'Scan', REDEEM_HOLD: 'Cash out', REDEEM_RELEASE: 'Points returned', ADJUST_CREDIT: 'Bonus', ADJUST_DEBIT: 'Deduction', BONUS: 'Bonus', EXPIRE: 'Expired' },
+    lt: { EARN_SCAN: 'Scan', REDEEM_HOLD: 'Cash out', REDEEM_RELEASE: 'Points returned', ADJUST_CREDIT: 'Bonus', ADJUST_DEBIT: 'Deduction', BONUS: 'Bonus', EXPIRE: 'Expired', PURCHASE_EARN: 'Purchase', PURCHASE_REVERSAL: 'Return', SCHEME_BONUS: 'Scheme bonus' },
+    schemes: 'Schemes', noSchemes: 'No schemes running right now.', endsOn: (d) => `Ends: ${d}`, multi: (m) => `${m}x points on every scan`, slabNow: (l, p) => `✅ ${l} → ${p} points`, noSlab: 'No slab reached yet', toNext: (r, rw) => `Next slab (${rw}) — only ${r} more`, top: '🏆 Top slab reached!',
   },
 };
 
@@ -114,8 +116,8 @@ $('logout').onclick = logout;
 async function loadHome() {
   meData = await api('/api/p/me');
   setBrand(meData.brand);
-  const [l, r] = await Promise.all([api('/api/p/ledger'), api('/api/p/redemptions')]);
-  meData.ledger = l.entries; meData.redemptions = r.redemptions;
+  const [l, r, sc] = await Promise.all([api('/api/p/ledger'), api('/api/p/redemptions'), api('/api/p/schemes')]);
+  meData.ledger = l.entries; meData.redemptions = r.redemptions; meData.schemes = sc.schemes;
   renderHome(); show('vHome');
   if (pendingCode) { const c = pendingCode; pendingCode = null; history.replaceState(null, '', `?brand=${brand}`); submitScan(c); }
 }
@@ -129,6 +131,16 @@ function renderHome() {
   $('pMobile').textContent = `+${participant.mobile}`;
   const fmt = (d) => new Date(d).toLocaleString(lang === 'hi' ? 'hi-IN' : 'en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   $('ledger').innerHTML = meData.ledger.length ? meData.ledger.map((e) => `<div class="row"><div>${esc(t('lt')[e.type] || e.type)}<div class="muted">${esc(e.note || '')} · ${fmt(e.created_at)}</div></div><div class="${e.points > 0 ? 'plus' : 'minus'}">${e.points > 0 ? '+' : ''}${e.points}</div></div>`).join('') : `<p class="muted">${t('empty')}</p>`;
+  const unit = (s, v) => (s.metric === 'AMOUNT' ? `₹${Number(v).toLocaleString('en-IN')}` : `${v}${s.metric === 'SCANS' ? ' scans' : ''}`);
+  const rw = (sl) => (sl.rewardType === 'PERCENT' ? `${sl.value}%` : sl.rewardType === 'PER_UNIT' ? `${sl.value}/unit` : `${sl.value} pts`);
+  $('schemeList').innerHTML = (meData.schemes || []).length ? meData.schemes.map((s) => {
+    const p = s.progress; const end = new Date(new Date(s.endsAt).getTime() - 1000).toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-IN', { day: 'numeric', month: 'short' });
+    const pct = p?.nextSlab ? Math.min(100, Math.round((p.value / p.nextSlab.min) * 100)) : 100;
+    return `<div class="scheme"><b>${esc(s.name)}</b>${s.description ? `<div class="muted">${esc(s.description)}</div>` : ''}<div class="muted">${t('endsOn')(end)}</div>
+      ${s.type === 'SCAN_MULTIPLIER' ? `<div class="plus">${t('multi')(s.multiplier)}</div>` : `<div style="margin-top:6px;font-size:20px;font-weight:800">${unit(s, p.value)}</div>
+      <div class="bar"><div style="width:${pct}%"></div></div><div>${p.slab ? t('slabNow')(esc(p.slab.label || rw(p.slab)), p.points) : t('noSlab')}</div>
+      <div class="muted">${p.nextSlab ? t('toNext')(unit(s, p.remainingToNext), rw(p.nextSlab)) : t('top')}</div>`}</div>`;
+  }).join('') : `<p class="muted">${t('noSchemes')}</p>`;
   $('redemptions').innerHTML = meData.redemptions.map((x) => `<div class="row"><div>₹${(x.amount_paise / 100).toLocaleString('en-IN')}<div class="muted">${esc(x.upi_id)} · ${fmt(x.created_at)}</div></div><div class="muted">${esc(t('st')[x.status])}</div></div>`).join('');
 }
 document.querySelectorAll('.tabs button').forEach((b) => b.onclick = () => {
@@ -136,6 +148,7 @@ document.querySelectorAll('.tabs button').forEach((b) => b.onclick = () => {
   $('tHist').classList.toggle('hidden', b.dataset.tab !== 'hist');
   $('tRedeem').classList.toggle('hidden', b.dataset.tab !== 'redeem');
   $('tProfile').classList.toggle('hidden', b.dataset.tab !== 'profile');
+  $('tSchemes').classList.toggle('hidden', b.dataset.tab !== 'schemes');
 });
 $('redeemBtn').onclick = async () => {
   $('redeemErr').textContent = ''; $('redeemBtn').disabled = true;

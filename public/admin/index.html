@@ -30,6 +30,13 @@
   .muted { color:var(--muted) } .err { color:var(--bad); margin-top:8px; min-height:18px }
   .bars { display:flex; align-items:flex-end; gap:3px; height:140px; padding-top:8px } .bars div { flex:1; background:var(--brand); border-radius:3px 3px 0 0; min-height:2px; opacity:.85 }
   .hidden { display:none !important }
+  .slabrow { display:grid; grid-template-columns:1fr 1fr 1fr 1fr auto; gap:8px; margin-top:8px }
+  .key { font-family:ui-monospace,Menlo,monospace; background:#fff8e1; border:1px dashed #e0b000; padding:10px; border-radius:10px; word-break:break-all }
+  .chat { max-width:520px; background:#ece5dd; border-radius:12px; padding:12px; height:420px; overflow:auto; display:flex; flex-direction:column; gap:6px }
+  .bub { max-width:85%; padding:8px 10px; border-radius:10px; white-space:pre-wrap; font-size:13.5px; box-shadow:0 1px 1px rgba(0,0,0,.08) }
+  .bub.in { align-self:flex-end; background:#dcf8c6 } .bub.out { align-self:flex-start; background:#fff }
+  code { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; background:#f4f4f4; padding:1px 5px; border-radius:5px }
+  pre { background:#f6f6f6; padding:12px; border-radius:10px; overflow:auto; font-size:12.5px }
   @media (max-width:800px) { .app { grid-template-columns:1fr } nav { display:flex; overflow:auto; gap:4px } nav .logo, nav .tenant { display:none } .grid2 { grid-template-columns:1fr } }
 </style>
 </head>
@@ -50,6 +57,10 @@
     <a data-v="products">Products</a>
     <a data-v="qr">QR batches</a>
     <a data-v="participants">Participants</a>
+    <a data-v="schemes">Schemes</a>
+    <a data-v="invoices">Invoices <span class="badge hidden" id="unmBadge"></span></a>
+    <a data-v="connectors">Connectors</a>
+    <a data-v="whatsapp">WhatsApp</a>
     <a data-v="redemptions">Redemptions <span class="badge hidden" id="pendBadge"></span></a>
     <a data-v="fraud">Fraud flags <span class="badge hidden" id="fraudBadge"></span></a>
     <a data-v="settings">Settings</a>
