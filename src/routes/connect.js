@@ -77,6 +77,46 @@ r.post('/products', auth, ah(async (req, res) => {
 }));
 
 /**
+ * Money each dealer owes (Korvo / Tally), sent nightly. Used by the AI Channel
+ * Manager for polite payment reminders, and to see when a payment came in.
+ * Body: { asOf, complete, items: [{ ref, name, mobile, outstanding, overdue, oldestDueDate, daysOverdue }] } (rupees).
+ * When `complete` is true, dealers missing from this snapshot are set to zero (they paid).
+ */
+r.post('/outstanding', auth, ah(async (req, res) => {
+  const b = req.body || {};
+  const asOf = b.asOf ? new Date(b.asOf) : new Date();
+  if (Number.isNaN(asOf.getTime())) throw badRequest('BAD_DATE', 'asOf is not a date');
+  const items = Array.isArray(b.items) ? b.items : [];
+  const paise = (v) => Math.max(0, Math.round(Number(String(v ?? 0).replace(/[^0-9.-]/g, '')) * 100) || 0);
+  let matched = 0, unmatched = 0;
+  for (const it of items) {
+    const ref = String(it.ref ?? it.partyId ?? '').trim();
+    if (!ref) continue;
+    const p = await matchParticipant({ query }, req.connector.tenant_id, { ref, mobile: it.mobile, gstin: it.gstin });
+    if (p) matched++; else unmatched++;
+    const od = paise(it.overdue), os = paise(it.outstanding);
+    await query(`
+      INSERT INTO dealer_outstanding (tenant_id, external_ref, participant_id, name, mobile, outstanding_paise, overdue_paise, oldest_due_date, days_overdue, as_of, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
+      ON CONFLICT (tenant_id, external_ref) DO UPDATE SET participant_id=coalesce(EXCLUDED.participant_id, dealer_outstanding.participant_id), name=EXCLUDED.name, mobile=EXCLUDED.mobile,
+        outstanding_paise=EXCLUDED.outstanding_paise, overdue_paise=EXCLUDED.overdue_paise, oldest_due_date=EXCLUDED.oldest_due_date, days_overdue=EXCLUDED.days_overdue, as_of=EXCLUDED.as_of, updated_at=now()
+      WHERE dealer_outstanding.as_of <= EXCLUDED.as_of`,
+    [req.connector.tenant_id, ref, p?.id || null, it.name || null, it.mobile || null, os, od, it.oldestDueDate || null, Number(it.daysOverdue) || 0, asOf]);
+    await query(`INSERT INTO dealer_outstanding_history (tenant_id, participant_id, external_ref, overdue_paise, outstanding_paise, as_of) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [req.connector.tenant_id, p?.id || null, ref, od, os, asOf]);
+  }
+  let cleared = 0;
+  if (b.complete) {
+    const { rows } = await query(`
+      UPDATE dealer_outstanding SET outstanding_paise=0, overdue_paise=0, days_overdue=0, as_of=$2, updated_at=now()
+       WHERE tenant_id=$1 AND as_of < $2 AND (outstanding_paise > 0 OR overdue_paise > 0) RETURNING participant_id, external_ref`, [req.connector.tenant_id, asOf]);
+    for (const x of rows) await query(`INSERT INTO dealer_outstanding_history (tenant_id, participant_id, external_ref, overdue_paise, outstanding_paise, as_of) VALUES ($1,$2,$3,0,0,$4)`, [req.connector.tenant_id, x.participant_id, x.external_ref, asOf]);
+    cleared = rows.length;
+  }
+  res.json({ received: items.length, matched, unmatched, cleared });
+}));
+
+/**
  * Partner token exchange (Korvo "Rewards" tab): the DMS backend, holding this connector's key,
  * swaps its dealer reference for a short-lived participant token, then calls /api/p/* as that dealer.
  * Only enabled when connector.config.allowTokenExchange is true. Never call this from a mobile app directly.

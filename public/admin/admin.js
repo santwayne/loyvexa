@@ -246,7 +246,18 @@ views.settings = async () => {
   };
 };
 
-boot().catch(() => logout());
+// One-click sign-in from the Korvo app: /admin/#sso=<one-time token>
+async function ssoFromHash() {
+  const m = /[#&]sso=([^&]+)/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname);
+  const r = await fetch('/api/auth/hub-sso', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: decodeURIComponent(m[1]) }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { $('loginErr').textContent = j.error?.message || 'Sign-in link expired. Open it again from Korvo.'; return; }
+  token = j.token; user = j.user; tenantId = user.tenantId;
+  store.set('wl_admin_token', token); store.set('wl_admin_user', JSON.stringify(user)); store.set('wl_admin_tenant', null);
+}
+ssoFromHash().finally(() => boot().catch(() => logout()));
 
 // ================= Phase 2 =================
 const PT = ['DEALER', 'DISTRIBUTOR', 'RETAILER', 'MECHANIC', 'ELECTRICIAN', 'PLUMBER', 'CONTRACTOR', 'PAINTER', 'CARPENTER'];
@@ -537,4 +548,115 @@ views.campaigns = async () => {
     } catch (e) { $('wErr').textContent = e.message; }
   };
   document.querySelectorAll('[data-wcancel]').forEach((b) => b.onclick = async () => { await api(`/api/admin/wa-campaigns/${b.dataset.wcancel}/cancel`, { method: 'POST' }); render(); });
+};
+
+
+// ================= Phase 4: AI Channel Manager + Korvo =================
+const AI_LEVEL = { SUGGEST: 'Suggest only', APPROVE: 'Ask me first', AUTO: 'Do it, then tell me' };
+const AI_CH = { WHATSAPP: 'WhatsApp', CALL: 'AI call', INTERNAL: 'In the console' };
+const aiPill = (s) => ({ DONE: 'ok', FAILED: 'bad', SKIPPED: '', EXPIRED: '', EXECUTING: 'warn', APPROVED: 'ok' }[s] ?? '');
+
+// AI strip on top of the dashboard: the one screen for Korvo + Loyvexa + AI
+const _dash = views.dashboard;
+views.dashboard = async () => {
+  await _dash();
+  try {
+    const a = await api('/api/admin/ai');
+    const strip = document.createElement('div');
+    strip.className = 'aistrip';
+    strip.innerHTML = `
+      <div><div class="v">${num(a.week.waiting)}</div><div class="l">AI actions waiting · <a id="goAi">open</a></div></div>
+      <div><div class="v">${inr(a.month.wonPaise)}</div><div class="l">Sales the AI helped bring in (30 days)</div></div>
+      <div><div class="v">${inr(a.korvo.ordersPaise30d)}</div><div class="l">Korvo orders (30 days) · ${num(a.korvo.orderingDealers30d)} dealers</div></div>
+      <div><div class="v">${inr(a.korvo.overduePaise)}</div><div class="l">Overdue payments · ${num(a.korvo.dealersOverdue)} dealers</div></div>
+      <div><div class="v">${inr(a.month.collectedPaise)}</div><div class="l">Recovered after AI reminders (30 days)</div></div>`;
+    $('main').insertBefore(strip, $('main').children[1]);
+    $('goAi').onclick = () => document.querySelector('nav a[data-v="ai"]').click();
+    $('aiBadge').textContent = a.week.waiting; $('aiBadge').classList.toggle('hidden', !a.week.waiting);
+  } catch { /* AI not available for this role */ }
+};
+
+views.ai = async () => {
+  const a = await api('/api/admin/ai');
+  const s = a.settings;
+  $('aiBadge').textContent = a.week.waiting; $('aiBadge').classList.toggle('hidden', !a.week.waiting);
+  const card = (x) => `<div class="aic">
+      <div class="t">${x.brief_item ? `<span class="n">${x.brief_item}</span>` : ''}<span class="pill">${esc(a.types.find((t) => t.type === x.type)?.label || x.type)}</span>
+        <span class="pill">${AI_CH[a.types.find((t) => t.type === x.type)?.channel] || ''}</span>${x.expected_paise > 0 ? `<span class="muted">~${inr(x.expected_paise)}</span>` : ''}
+        ${x.status === 'APPROVED' ? '<span class="pill ok">approved · sends in contact hours</span>' : ''}${x.autonomy === 'SUGGEST' ? '<span class="pill warn">idea</span>' : ''}</div>
+      <h4>${esc(x.title)}</h4><div class="why">${esc(x.reason)}</div>
+      ${x.payload?.message ? `<div class="msg" id="m-${x.id}">${esc(x.payload.message)}</div>` : ''}
+      ${x.type === 'SCHEME_IDEA' ? `<div class="msg">${esc(x.payload.draft.description)}\n${esc(new Date(x.payload.draft.startsAt).toLocaleDateString('en-IN'))} → ${esc(new Date(x.payload.draft.endsAt).toLocaleDateString('en-IN'))}</div>` : ''}
+      ${x.status === 'PROPOSED' ? `<div class="acts"><button class="p sm" data-ok="${x.id}">${x.type === 'WINBACK_CALL' ? 'Approve call' : x.type === 'SCHEME_IDEA' ? 'Create draft' : x.type === 'FRAUD_REVIEW' ? 'Block & hold' : 'Approve'}</button>
+        ${x.payload?.message ? `<button class="sm" data-edit="${x.id}">Edit text</button>` : ''}<button class="sm" data-skip="${x.id}">Skip</button><span class="muted" id="r-${x.id}"></span></div>` : ''}
+    </div>`;
+  const lv = (t) => `<select data-auto="${t.type}">${['SUGGEST', 'APPROVE', 'AUTO'].filter((l) => !(l === 'AUTO' && ['FRAUD_REVIEW', 'SCHEME_IDEA'].includes(t.type))).map((l) => `<option value="${l}" ${s.aiAutonomy[t.type] === l ? 'selected' : ''}>${AI_LEVEL[l]}</option>`).join('')}</select>`;
+  $('main').innerHTML = `<h2>AI Channel Manager</h2>
+  <p class="muted" style="margin-top:-8px;max-width:760px">Every morning it reads orders from Korvo, scans, schemes, payments and fraud flags, picks the actions most likely to bring in sales, and asks you on WhatsApp before it contacts anyone. ${s.aiEnabled ? '<b>It is on.</b>' : '<b>It is off</b> — switch it on in the settings below.'}</p>
+  <div class="kpis">
+    <div class="kpi"><div class="v">${inr(a.week.wonPaise)}</div><div class="l">Sales influenced, 7 days (${num(a.week.won)} wins)</div></div>
+    <div class="kpi"><div class="v">${inr(a.month.wonPaise)}</div><div class="l">Sales influenced, 30 days</div></div>
+    <div class="kpi"><div class="v">${num(a.week.done)}</div><div class="l">Actions done, 7 days</div></div>
+    <div class="kpi"><div class="v">${inr(a.month.collectedPaise)}</div><div class="l">Payments recovered, 30 days</div></div>
+    <div class="kpi"><div class="v">${num(a.month.heldPoints)}</div><div class="l">Points held from fraud, 30 days</div></div>
+  </div>
+  <div class="panel"><div class="row" style="align-items:center"><h3 style="margin:0;flex:1">Today's plan</h3>
+    <button class="sm" id="aiPlan">Plan now</button><button class="sm" id="aiSend">Send plan to WhatsApp</button><button class="sm" id="aiReport">This week's report</button></div>
+    <div class="err" id="aiErr"></div>
+    ${a.plan.length ? `<div class="aicards" style="margin-top:12px">${a.plan.map(card).join('')}</div>` : '<p class="muted">Nothing waiting. The next plan is made at the brief hour, or press Plan now.</p>'}
+  </div>
+  <div class="panel"><h3>What it did</h3><table><tr><th>When</th><th>Action</th><th>Result</th><th>Outcome</th></tr>
+    ${a.recent.map((x) => `<tr><td>${dt(x.executed_at || x.updated_at)}</td><td>${esc(x.title)}${x.decided_by ? `<div class="muted">${esc(x.decided_by.replace('whatsapp:', 'approved on WhatsApp by ').replace(/^console:.*/, 'approved in console').replace('auto', 'automatic'))}</div>` : ''}</td>
+      <td><span class="pill ${aiPill(x.status)}">${x.status}</span>${x.error ? `<div class="muted">${esc(x.error)}</div>` : ''}</td>
+      <td>${x.outcome === 'WON' ? `<span class="pill ok">Won ${x.outcome_paise ? inr(x.outcome_paise) : ''}</span>` : x.outcome === 'NONE' ? '<span class="muted">No result in 14 days</span>' : '<span class="muted">—</span>'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No actions yet.</td></tr>'}</table>
+    <p class="muted" style="margin-top:10px">"Won" means the dealer or mechanic ordered, bought, scanned or paid within 14 days of the action. It shows sales the AI influenced, not proof it caused them.</p></div>
+  <div class="panel"><h3>Settings</h3>
+    <div class="row"><div><label><input type="checkbox" id="aiOn" style="width:auto" ${s.aiEnabled ? 'checked' : ''}> AI Channel Manager on</label></div>
+      <div><label>Owner / sales head WhatsApp numbers (comma separated)</label><input id="aiNums" value="${esc(s.aiBriefNumbers.join(', '))}" placeholder="919814000101"></div>
+      <div><label>Morning plan at (hour, IST)</label><input type="number" id="aiHour" value="${s.aiBriefHour}"></div></div>
+    <div class="row">${[['aiDailyCap', 'Max actions a day'], ['aiMaxTouchesPerWeek', 'Max messages/calls per person a week'], ['aiOverdueDays', 'Payment reminder after (days late)'], ['aiOverdueMinRupees', '…if overdue at least (₹)'], ['aiWinbackMinRupees', 'Call quiet dealers who bought at least (₹, 6 months)'], ['aiSlabPushDays', 'Push slabs when scheme ends within (days)']].map(([k, l]) => `<div><label>${l}</label><input type="number" data-ai="${k}" value="${s[k]}"></div>`).join('')}</div>
+    <label style="margin-top:14px">How much it does on its own</label>
+    <div class="row">${a.types.map((t) => `<div><label>${esc(t.label)}</label>${lv(t)}</div>`).join('')}</div>
+    <p class="muted">Start with "Ask me first". Fraud holds and scheme ideas always need a person.</p>
+    <button class="p" id="aiSave" style="margin-top:8px">Save</button><span class="err" id="aiSetErr"></span>
+    <details style="margin-top:14px"><summary class="muted">WhatsApp templates the AI uses outside the 24-hour window</summary><table>${Object.entries(a.templates).map(([k, v]) => `<tr><td><code>${k}</code></td><td class="muted">${esc(v)}</td></tr>`).join('')}</table>
+      <p class="muted">Add each approved template under WhatsApp → templates with this event name.</p></details>
+  </div>`;
+  const decideBtn = async (id, decision, text) => {
+    $(`r-${id}`).textContent = '…';
+    try { const r = await api(`/api/admin/ai/actions/${id}`, { method: 'POST', body: { decision, ...(text ? { text } : {}) } }); $(`r-${id}`).textContent = r.status === 'DONE' ? 'Done ✓' : r.status === 'DEFERRED' ? 'Approved, sends in contact hours' : r.error || r.status; setTimeout(render, 900); } catch (e) { $(`r-${id}`).textContent = e.message; }
+  };
+  document.querySelectorAll('[data-ok]').forEach((b) => b.onclick = () => decideBtn(b.dataset.ok, 'approve', $(`t-${b.dataset.ok}`)?.value));
+  document.querySelectorAll('[data-skip]').forEach((b) => b.onclick = () => decideBtn(b.dataset.skip, 'skip'));
+  document.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => { const m = $(`m-${b.dataset.edit}`); m.outerHTML = `<textarea id="t-${b.dataset.edit}" maxlength="1000">${esc(m.textContent)}</textarea>`; b.remove(); });
+  $('aiPlan').onclick = async () => { try { const r = await api('/api/admin/ai/plan', { method: 'POST' }); $('aiErr').textContent = `Planned ${r.planned} new · ${r.waiting} waiting`; setTimeout(render, 700); } catch (e) { $('aiErr').textContent = e.message; } };
+  $('aiSend').onclick = async () => { try { const r = await api('/api/admin/ai/brief', { method: 'POST' }); $('aiErr').textContent = `Sent to ${r.sent} number(s)`; } catch (e) { $('aiErr').textContent = e.message; } };
+  $('aiReport').onclick = async () => { const r = await api('/api/admin/ai/report'); alert(r.text.replace(/\*/g, '')); };
+  $('aiSave').onclick = async () => {
+    const body = { aiEnabled: $('aiOn').checked, aiBriefHour: Number($('aiHour').value), aiBriefNumbers: $('aiNums').value.split(',').map((x) => x.replace(/\s/g, '')).filter(Boolean), aiAutonomy: {} };
+    document.querySelectorAll('[data-ai]').forEach((i) => { body[i.dataset.ai] = Number(i.value); });
+    document.querySelectorAll('[data-auto]').forEach((i) => { body.aiAutonomy[i.dataset.auto] = i.value; });
+    try { await api('/api/admin/ai/settings', { method: 'PATCH', body }); $('aiSetErr').textContent = 'Saved ✓'; } catch (e) { $('aiSetErr').textContent = e.message; }
+  };
+};
+
+// Korvo link on the Connectors page: one click wires both products
+const _conn = views.connectors;
+views.connectors = async () => {
+  await _conn();
+  const k = await api('/api/admin/korvo').catch(() => null);
+  if (!k) return;
+  const box = document.createElement('div');
+  box.className = 'panel';
+  box.innerHTML = k.linked
+    ? `<h3>Korvo DMS · linked</h3><p>Company <b>${esc(k.companyName || k.companyCode)}</b> (${esc(k.companyCode)}), linked ${dt(k.linkedAt)}. Dealers, products, orders and outstanding come in from Korvo every night; WhatsApp orders go to Korvo for approval.</p>
+       <div class="row"><div><label>Korvo company code</label><input id="kCode" value="${esc(k.companyCode)}"></div><div style="flex:0"><button class="sm" id="kLink">Re-link</button></div></div><div class="err" id="kErr"></div>`
+    : `<h3>Connect Korvo DMS</h3><p class="muted">Links this brand to its company in Korvo in one step: dealers, products, orders and outstanding payments flow in nightly, dealers see their rewards inside the Korvo app, and WhatsApp orders go into Korvo's approval chain. ${k.hubConfigured ? '' : '<b>HUB_SECRET_KORVO is not set on this server yet.</b>'}</p>
+       <div class="row"><div><label>Korvo company code</label><input id="kCode" placeholder="DAP"></div><div><label>Earn purchase points when Korvo order is</label><select id="kEarn"><option value="delivered">Delivered</option><option value="approved">Approved</option></select></div>
+       <div style="flex:0"><button class="p" id="kLink">Connect</button></div></div><div class="err" id="kErr"></div>`;
+  $('main').insertBefore(box, $('main').children[1]);
+  $('kLink').onclick = async () => {
+    $('kErr').textContent = 'Connecting…';
+    try { const r = await api('/api/admin/korvo/link', { method: 'POST', body: { companyCode: $('kCode').value.trim(), ...($('kEarn') ? { earnOn: $('kEarn').value } : {}) } }); $('kErr').textContent = `Linked to ${r.companyName || r.companyCode} ✓`; setTimeout(render, 900); } catch (e) { $('kErr').textContent = e.message; }
+  };
 };

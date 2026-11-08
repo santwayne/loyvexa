@@ -14,6 +14,7 @@ import connectRoutes from './routes/connect.js';
 import whatsappRoutes from './routes/whatsapp.js';
 import admin2Routes from './routes/admin2.js';
 import admin3Routes from './routes/admin3.js';
+import aiRoutes from './routes/ai.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -43,6 +44,7 @@ export function createApp() {
   app.use('/api/admin', adminRoutes);
   app.use('/api/admin', admin2Routes);
   app.use('/api/admin', admin3Routes);
+  app.use('/api', aiRoutes); // Bundle B: AI Channel Manager, Korvo link, sign-in from Korvo
   app.use('/api/whatsapp', whatsappRoutes);
   app.use('/api/p', participantRoutes);
   app.use(publicRoutes);

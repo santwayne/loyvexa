@@ -1,5 +1,7 @@
 # Korvo (formerly Royal) ↔ Loyvexa integration
 
+> **Status (Nov 2026):** built. Korvo side is on `royalSoftwareBackend` branch `feature/loyvexa-bundle` (`services/loyvexa.js`, `routes/integrations/loyvexaRoute.js`) and the Rewards tab on `royalappfrontend` branch `feature/loyvexa-bundle`. Set it up with **Connect Korvo** in the Loyvexa console instead of copying keys; the manual steps below still work. New since this doc: Korvo also pushes overdue outstanding nightly to `POST /api/connect/outstanding`.
+
 Loyvexa and Korvo are two products. They talk only over HTTP. Nothing in this file needs a shared database.
 
 ```

@@ -31,6 +31,12 @@ export const config = {
     baseUrl: process.env.KORVO_BASE_URL || '',
     apiKey: process.env.KORVO_API_KEY || '',
   },
+  // Bundle B one platform: secret shared with Korvo (HUB_SECRET there) for
+  // automatic set-up and one-click sign-in from the Korvo app.
+  hubSecret: process.env.HUB_SECRET_KORVO || '',
+  // Optional: Claude writes the weekly insight. Without a key a plain summary is used.
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+  aiModel: process.env.AI_MODEL || 'claude-haiku-5-5',
   workerIntervalMs: Number(process.env.WORKER_INTERVAL_MS || 15000),
   corsOrigins: (process.env.CORS_ORIGINS || '*').split(',').map((s) => s.trim()),
 };
@@ -71,6 +77,21 @@ export const DEFAULT_TENANT_SETTINGS = {
   // Phase 3 — points expiry
   pointsExpiryMonths: 0,         // 0 = points never expire
   expiryReminderDays: 30,
+  // Phase 4 — AI Channel Manager (Bundle B). Off until the brand switches it on.
+  aiEnabled: false,
+  aiBriefNumbers: [],            // owner / sales-head mobiles that get the morning plan and can approve by WhatsApp
+  aiBriefHour: 9,                // IST
+  aiContactFromHour: 10,         // IST: no dealer / mechanic messages before…
+  aiContactToHour: 20,           // …or after this hour
+  aiAutonomy: {},                // per action type: SUGGEST | APPROVE | AUTO (defaults in services/ai/settings.js)
+  aiDailyCap: 25,                // actions per day
+  aiMaxTouchesPerWeek: 2,        // AI messages/calls per person per 7 days
+  aiReorderMinOrders: 3,         // invoices needed before predicting a reorder
+  aiSlabPushDays: 10,            // push near-slab participants when a scheme ends within N days
+  aiSlabPushWithinPct: 30,       // …and they are within N% of the next slab
+  aiOverdueDays: 15,             // payment reminder after N days past due
+  aiOverdueMinRupees: 5000,      // …and at least this much overdue
+  aiWinbackMinRupees: 25000,     // dealer bought at least this much in the 180 days before going quiet
 };
 
 if (process.env.NODE_ENV === 'production') {

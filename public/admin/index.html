@@ -39,6 +39,13 @@
   .bub.in { align-self:flex-end; background:#dcf8c6 } .bub.out { align-self:flex-start; background:#fff }
   code { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; background:#f4f4f4; padding:1px 5px; border-radius:5px }
   pre { background:#f6f6f6; padding:12px; border-radius:10px; overflow:auto; font-size:12.5px }
+  .aicards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px }
+  .aic { background:#fff; border:1px solid var(--line); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:8px }
+  .aic .t { display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:12px } .aic h4 { margin:0; font-size:14.5px } .aic .why { color:var(--muted); font-size:13px }
+  .aic .msg { background:#f6f3ee; border-radius:10px; padding:8px 10px; white-space:pre-wrap; font-size:13px } .aic textarea { min-height:110px; font-size:13px }
+  .aic .acts { display:flex; gap:6px; flex-wrap:wrap; margin-top:auto } .aic .n { width:22px; height:22px; border-radius:50%; background:var(--brand); color:#fff; display:inline-grid; place-items:center; font-size:12px; font-weight:700 }
+  .aistrip { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; background:linear-gradient(135deg,#14213d,#1d3557); color:#fff; border-radius:16px; padding:16px; margin-bottom:18px }
+  .aistrip .v { font-size:22px; font-weight:750 } .aistrip .l { font-size:12px; color:#c9d3e6 } .aistrip a { color:#ffb37a; cursor:pointer; text-decoration:underline }
   @media (max-width:800px) { .app { grid-template-columns:1fr } nav { display:flex; overflow:auto; gap:4px } nav .logo, nav .tenant { display:none } .grid2 { grid-template-columns:1fr } }
 </style>
 </head>
@@ -56,6 +63,7 @@
     <div class="logo"><img src="loyvexa-logo.png" alt="Loyvexa"></div><div class="tenant" id="tenantName"></div>
     <div id="tenantPick" class="hidden" style="padding:0 6px 14px"><select id="tenantSelect"></select></div>
     <a data-v="dashboard" class="on">Dashboard</a>
+    <a data-v="ai">AI Manager <span class="badge hidden" id="aiBadge"></span></a>
     <a data-v="products">Products</a>
     <a data-v="qr">QR batches</a>
     <a data-v="participants">Participants</a>

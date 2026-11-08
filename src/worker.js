@@ -13,6 +13,7 @@ import { dispatchDue } from './services/calls/index.js';
 import { pushPlaced } from './services/orders.js';
 import { sendDue } from './services/campaigns.js';
 import { runExpiry } from './services/expiry.js';
+import { tickAi } from './services/ai/index.js';
 
 const HOUR = 3600000;
 const lastRun = { segments: 0, expiry: 0 };
@@ -54,9 +55,10 @@ export async function tick({ force = false } = {}) {
   const calls = await dispatchDue();
   const ordersPushed = await pushPlaced();
   const campaignMsgs = await sendDue();
+  const ai = await tickAi(new Date(now)); // AI Channel Manager: plan, brief, run approved actions, score outcomes
   let delivered = 0; let k;
   do { k = await processEventsOnce(); delivered += k; } while (k === 100);
-  return { settled, delivered, calls, ordersPushed, campaignMsgs, segments, expiry };
+  return { settled, delivered, calls, ordersPushed, campaignMsgs, segments, expiry, ai };
 }
 
 if (process.argv[1]?.endsWith('worker.js')) {

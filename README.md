@@ -1,4 +1,4 @@
-# Loyvexa: Channel Loyalty Platform (Phase 1)
+# Loyvexa: Channel Loyalty Platform
 
 Loyvexa is a loyalty platform for manufacturers. A mechanic, electrician or retailer scans the QR code on a genuine product, earns points, and cashes them out to UPI. Anyone can scan the same QR with a normal phone camera to check whether the product is genuine.
 
@@ -222,6 +222,42 @@ New env: `CALL_PROVIDER` (`mock` | `waynering`), `WAYNERING_BASE_URL`, `WAYNERIN
 2. **Korvo:** build the 4 items in `docs/korvo-integration.md` (webhook, master sync, external order endpoint, Rewards tab).
 3. **WhatsApp:** approve templates for campaigns, `order.sent`, `points.expiring` and `points.expired`.
 4. **Expiry:** decide the policy per brand and tell participants before switching it on. Expiring earned points needs clear programme terms.
+
+---
+
+# Phase 4: AI Channel Manager + Korvo as one platform (Bundle B)
+
+Tests: `npm run test:e2e4` (18 checks; server running with mock WhatsApp and calls, `HUB_SECRET_KORVO` set and `KORVO_BASE_URL=http://127.0.0.1:4799` — the test starts a fake Korvo there).
+
+## AI Channel Manager (`src/services/ai/`)
+
+Every morning, at the brand's brief hour, it reads orders (Korvo / Tally invoices), scans, schemes, outstanding payments and fraud flags, and proposes the actions most likely to bring in sales:
+
+| Action | When | What it does | Default |
+|---|---|---|---|
+| Reorder reminder | A dealer's own rhythm says an order is due (median gap between their invoices; ≥ 3 orders a year) | WhatsApp with their last basket; the dealer replies **REORDER** and the cart is ready, then **confirm** | Ask first |
+| Scheme slab push | A live slab scheme ends within 10 days and someone is within 30% of the next slab | WhatsApp: "only ₹X more for Y" | Ask first |
+| Win-back AI call | A dealer who bought ≥ ₹25,000 in 6 months has gone quiet (21–120 days) | AI call (WayneRing) with the `DEALER_WINBACK` script | Ask first |
+| Mechanic nudge | A mechanic who used to earn stopped scanning (AT_RISK) | WhatsApp with their balance and the live scheme | Automatic |
+| Payment reminder | Korvo says ≥ ₹5,000 is ≥ 15 days overdue | Polite WhatsApp from accounts | Ask first |
+| Fraud hold | 2+ open fraud flags this week and a cash-out waiting | Blocks the participant; payout stays for review | Always ask |
+| Scheme idea | Mondays, if dealers are slowing and no purchase scheme is running | Drafts a 30-day slab scheme from the brand's median monthly purchase | Suggest only |
+
+It ranks them by expected ₹ × the brand's own learned win rate, then applies guardrails: one action per person, at most 2 AI touches per person a week (counting campaigns and calls), STOP and DND respected, contact hours only, a daily cap.
+
+The owner / sales head gets a numbered plan on the brand's WhatsApp number and replies **1 3**, **ALL**, **SKIP**, **PLAN** or **REPORT**. The console (AI Manager) shows the same plan with Approve / Edit text / Skip, the results, and the settings (including per-action autonomy). Mondays bring a weekly report; with `ANTHROPIC_API_KEY` set, Claude writes the one-line insight in Hinglish.
+
+Outcomes: an invoice, WhatsApp order, scan or lower overdue amount from that person within 14 days marks the action **Won** with its ₹ value ("sales influenced", not proof of cause). Learned win rates feed the next plans.
+
+Outside Meta's 24-hour window business messages need approved templates under `tenant_channels.config.templates`: `ai.reorder`, `ai.slab`, `ai.mechanic`, `ai.payment`, `ai.brief`, `ai.report` (params in `src/services/ai/messaging.js`).
+
+## Korvo as one platform
+
+- **Connect Korvo** (Console → Connectors, or `POST /api/admin/korvo/link {companyCode}`): creates/re-keys the brand's ROYAL connector, calls Korvo's `POST /api/v1/hub/provision` (JWT signed with `HUB_SECRET_KORVO`), and stores the key Korvo returns (encrypted) for WhatsApp orders. Nobody copies keys.
+- From then on Korvo sends dealers, products, order status changes and outstanding payments; dealers see their points inside the Korvo app (Rewards tab via token exchange); WhatsApp orders go into Korvo's approval chain.
+- `POST /api/connect/outstanding` — nightly overdue snapshot per dealer (rupees). `complete: true` zeroes dealers who paid.
+- **Sign-in from Korvo**: the Korvo app's "Loyalty console" button opens `/admin/#sso=<token>`; `POST /api/auth/hub-sso` swaps the 60-second, single-use token for a console session (creates a TENANT_ADMIN for that email if needed; never a super-admin session).
+- The console dashboard now shows Korvo orders, overdue payments and AI results on one screen.
 
 ## Not built yet (next)
 Rewards catalog (gifts and vouchers alongside UPI), mechanic KYC (PAN for TDS), Punjabi (Gurmukhi) UI in the PWA.
