@@ -14,6 +14,7 @@ import connectRoutes from './routes/connect.js';
 import whatsappRoutes from './routes/whatsapp.js';
 import admin2Routes from './routes/admin2.js';
 import admin3Routes from './routes/admin3.js';
+import hubRoutes from './routes/hub.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -39,6 +40,7 @@ export function createApp() {
   if (process.env.NODE_ENV !== 'test') app.use(morgan('tiny'));
 
   app.get('/health', (_req, res) => res.json({ ok: true, product: config.productName }));
+  app.use('/api/hub', hubRoutes); // Regulars hub: brand set-up + single sign-on
   app.use('/api', platformRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/admin', admin2Routes);
@@ -48,6 +50,7 @@ export function createApp() {
   app.use(publicRoutes);
   app.use('/app', express.static(path.join(root, 'public', 'app')));
   app.use('/admin', express.static(path.join(root, 'public', 'admin')));
+  app.get('/sso', (_req, res) => res.sendFile(path.join(root, 'public', 'admin', 'sso.html')));
   app.get('/', (_req, res) => res.redirect('/admin/'));
 
   app.use((req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }));
