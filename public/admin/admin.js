@@ -47,12 +47,13 @@ async function boot() {
   $('loginView').classList.add('hidden'); $('appView').classList.remove('hidden');
   if (user.role === 'SUPER_ADMIN') {
     const { tenants } = await api('/api/platform/tenants');
+    $('brandsNav').classList.remove('hidden');
     $('tenantPick').classList.remove('hidden');
     $('tenantSelect').innerHTML = tenants.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
     if (!tenantId || !tenants.find((t) => t.id === tenantId)) tenantId = tenants[0]?.id;
     $('tenantSelect').value = tenantId || '';
     $('tenantSelect').onchange = () => { tenantId = $('tenantSelect').value; store.set('wl_admin_tenant', tenantId); render(); };
-    if (!tenantId) { $('main').innerHTML = '<div class="panel">No brands yet. Create one via POST /api/platform/tenants.</div>'; return; }
+    if (!tenantId) { view = 'brands'; document.querySelectorAll('nav a').forEach((x) => x.classList.toggle('on', x.dataset.v === 'brands')); render(); return; }
   } else tenantId = user.tenantId;
   const { tenant } = await api('/api/admin/tenant');
   $('tenantName').textContent = `${tenant.name} · ${user.name}`;
@@ -64,7 +65,7 @@ const views = {};
 async function render() {
   $('main').innerHTML = '<p class="muted">Loading…</p>';
   try { await views[view](); } catch (e) { $('main').innerHTML = `<div class="panel err">${esc(e.message)}</div>`; }
-  if (view !== 'dashboard') refreshBadges();
+  if (view !== 'dashboard' && view !== 'brands' && tenantId) refreshBadges();
 }
 async function refreshBadges() {
   try {
@@ -537,4 +538,41 @@ views.campaigns = async () => {
     } catch (e) { $('wErr').textContent = e.message; }
   };
   document.querySelectorAll('[data-wcancel]').forEach((b) => b.onclick = async () => { await api(`/api/admin/wa-campaigns/${b.dataset.wcancel}/cancel`, { method: 'POST' }); render(); });
+};
+
+// ---------- brands (super admin) ----------
+// Brands are created by the Regulars hub when a client's bundle includes
+// Loyvexa (Regulars → Admin → Products & Bundles), so there is no "new brand"
+// form here. This page is for support: see every brand, open one, pause one.
+const safeColor = (c) => (/^#[0-9a-fA-F]{3,8}$/.test(c || '') ? c : '#E85D04');
+views.brands = async () => {
+  const { tenants } = await api('/api/platform/tenants');
+  $('main').innerHTML = `<h2>Brands</h2>
+  <div class="panel muted">New brands are created automatically when a client gets a bundle with Loyvexa in Regulars (Admin → Products &amp; Bundles), with the owner as the first admin.
+    The hub also pauses a brand when its bundle lapses and turns it back on after payment. A pause you set here on a hub brand lasts until the next hub update; to stop a client for good, end their bundle in Regulars.</div>
+  <div class="panel"><table><tr><th>Brand</th><th>Slug</th><th>Set up by</th><th class="num">Participants</th><th class="num">Scans</th><th>Created</th><th>Status</th><th></th></tr>
+  ${tenants.length ? tenants.map((t) => `<tr>
+    <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:${safeColor(t.brand_color)}"></span><b>${esc(t.name)}</b></td>
+    <td><code>${esc(t.slug)}</code></td>
+    <td>${t.hub_business_id ? '<span class="pill ok">Regulars hub</span>' : '<span class="pill">By hand</span>'}</td>
+    <td class="num">${num(t.participants)}</td><td class="num">${num(t.scans)}</td><td>${dt(t.created_at)}</td>
+    <td><span class="pill ${t.status === 'ACTIVE' ? 'ok' : 'bad'}">${t.status === 'ACTIVE' ? 'Active' : 'Suspended'}</span></td>
+    <td style="white-space:nowrap"><button class="sm" data-bopen="${t.id}">Open</button>
+      ${t.status === 'ACTIVE' ? `<button class="sm danger" data-bstatus="${t.id}" data-to="SUSPENDED" data-name="${esc(t.name)}">Suspend</button>` : `<button class="sm" data-bstatus="${t.id}" data-to="ACTIVE" data-name="${esc(t.name)}">Activate</button>`}</td></tr>`).join('')
+    : '<tr><td colspan="8" class="muted">No brands yet. Give a client a bundle with Loyvexa in Regulars and it appears here.</td></tr>'}</table></div>`;
+  document.querySelectorAll('[data-bopen]').forEach((b) => b.onclick = () => {
+    tenantId = b.dataset.bopen; store.set('wl_admin_tenant', tenantId);
+    view = 'dashboard'; document.querySelectorAll('nav a').forEach((x) => x.classList.toggle('on', x.dataset.v === 'dashboard'));
+    boot();
+  });
+  document.querySelectorAll('[data-bstatus]').forEach((b) => b.onclick = async () => {
+    const to = b.dataset.to;
+    const ask = to === 'SUSPENDED'
+      ? `Suspend ${b.dataset.name}? Their team can't use the console and dealers/mechanics can't scan or redeem until it's activated again.`
+      : `Activate ${b.dataset.name} again?`;
+    if (!confirm(ask)) return;
+    b.disabled = true;
+    try { await api(`/api/platform/tenants/${b.dataset.bstatus}`, { method: 'PATCH', body: { status: to } }); render(); }
+    catch (e) { alert(e.message); b.disabled = false; }
+  });
 };

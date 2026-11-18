@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Loyvexa · Signing you in</title>
+<link rel="icon" type="image/png" href="/admin/loyvexa-logo.png">
+<style>
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:#f7f6f3; color:#1c1c1c }
+  .box { max-width:380px; margin:18vh auto; background:#fff; padding:28px; border-radius:16px; box-shadow:0 2px 16px rgba(0,0,0,.06); text-align:center }
+  img { width:180px; height:auto } .err { color:#c62828 } a { color:#E85D04 }
+</style>
+</head>
+<body>
+<div class="box">
+  <img src="/admin/loyvexa-logo.png" alt="Loyvexa">
+  <p id="msg">Signing you in…</p>
+</div>
+<script>
+// Single sign-on from the Regulars hub: /sso#token=…&next=/admin/
+// The token is in the fragment, so it never reaches server logs; it works once.
+(async () => {
+  const msg = document.getElementById('msg');
+  const params = new URLSearchParams(location.hash.slice(1));
+  const token = params.get('token');
+  history.replaceState(null, '', location.pathname); // drop the token from the address bar
+  if (!token) { msg.innerHTML = 'This sign-in link is incomplete. <a href="/admin/">Log in with email</a>.'; msg.className = 'err'; return; }
+  try {
+    const res = await fetch('/api/hub/sso/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error?.message || 'Sign-in failed');
+    try {
+      localStorage.setItem('wl_admin_token', j.token);
+      localStorage.setItem('wl_admin_user', JSON.stringify(j.user));
+      localStorage.setItem('wl_admin_tenant', j.user.tenantId || '');
+    } catch { throw new Error('Your browser blocked storage. Allow site data for this page and try again.'); }
+    location.replace(j.next || '/admin/');
+  } catch (e) {
+    msg.className = 'err';
+    msg.textContent = `${e.message} Go back to your account and press Open Loyvexa again (each link works once, for 1 minute).`;
+  }
+})();
+</script>
+</body>
+</html>
