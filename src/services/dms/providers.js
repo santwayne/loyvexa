@@ -1,4 +1,5 @@
 import { config } from '../../config.js';
+import { decrypt } from '../../lib/crypto.js';
 
 /**
  * DMS order push. Contract:
@@ -17,9 +18,12 @@ const mock = {
 const korvo = {
   name: 'korvo',
   async push({ order, participant, tenant }) {
-    const res = await fetch(`${config.korvo.baseUrl.replace(/\/$/, '')}/api/v1/orders/external`, {
+    // Per-brand link made by "Connect Korvo" (tenants.korvo); env vars are the fallback.
+    const link = tenant.korvo?.apiKeyEnc ? { baseUrl: tenant.korvo.baseUrl, apiKey: decrypt(tenant.korvo.apiKeyEnc) } : config.korvo;
+    if (!link.baseUrl || !link.apiKey) throw new Error('Korvo is not linked for this brand');
+    const res = await fetch(`${link.baseUrl.replace(/\/$/, '')}/api/v1/orders/external`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Api-Key': config.korvo.apiKey, 'Idempotency-Key': order.id },
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': link.apiKey, 'Idempotency-Key': order.order_no },
       body: JSON.stringify({
         source: 'loyvexa-whatsapp', externalOrderId: order.order_no, brand: tenant.slug,
         dealerExternalRef: participant.external_ref, dealerMobile: participant.mobile, dealerName: participant.name,

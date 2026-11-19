@@ -7,6 +7,7 @@ import { scan } from './scan.js';
 import { progressFor } from './schemes.js';
 import * as ledger from './ledger.js';
 import * as orders from './orders.js';
+import { handleOwnerMessage } from './ai/brief.js';
 
 /**
  * WhatsApp bot for dealers + mechanics. Works in Roman Hinglish (default) or English.
@@ -143,6 +144,13 @@ export async function handleInbound({ channel, from, text, providerMsgId }) {
      ON CONFLICT DO NOTHING RETURNING id`, [tenant.id, mobile || from, text, providerMsgId || null]);
   if (providerMsgId && !ins.rowCount) return null; // Meta retried a message we already handled
 
+  // The brand's owner / sales head approving the AI's plan ("1 3", "ALL", "SKIP", "PLAN").
+  const ownerReply = await handleOwnerMessage({ tenant, mobile, text });
+  if (ownerReply) {
+    await sendText({ tenantId: tenant.id, to: from, text: ownerReply });
+    return ownerReply;
+  }
+
   const { rows: [p] } = await query(`SELECT * FROM participants WHERE tenant_id=$1 AND mobile=$2`, [tenant.id, mobile]);
   if (p) await query(`UPDATE messages SET participant_id=$1 WHERE id=$2`, [p.id, ins.rows[0]?.id]);
   const reply = (t) => sendText({ tenantId: tenant.id, participantId: p?.id, to: from, text: t }).then(() => t);
@@ -161,6 +169,12 @@ export async function handleInbound({ channel, from, text, providerMsgId }) {
   // Ordering: "order" shows the catalog; while a cart is open, "<item> <qty>", cart, confirm, cancel
   if (it === 'ORDER') {
     if (!mayOrder) return reply(l().noOrder);
+    const { items, cart } = await orders.startOrder({ tenant, participant: p });
+    return reply(`${orders.catalogText(items, lang)}${cart.items?.length ? `\n\n${orders.cartText(cart, lang)}` : ''}`);
+  }
+  if (mayOrder && /^(reorder|re-order|re order|wahi|same again|wahi order)$/i.test(String(text).trim())) {
+    const r = await orders.reorderFromAi({ tenant, participant: p });
+    if (r) return reply(`${orders.cartText(r.cart, lang)}\n\n${lang === 'en' ? 'Change a quantity like *1 20*, then *confirm*.' : 'Quantity badalni ho toh *1 20* jaise bhejo, phir *confirm*.'}`);
     const { items, cart } = await orders.startOrder({ tenant, participant: p });
     return reply(`${orders.catalogText(items, lang)}${cart.items?.length ? `\n\n${orders.cartText(cart, lang)}` : ''}`);
   }

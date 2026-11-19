@@ -57,6 +57,29 @@ export async function setItem({ tenant, participant, idx, qty }) {
   return { cart, product: p };
 }
 
+/**
+ * "REORDER" after an AI reorder reminder: put the suggested basket (the
+ * dealer's last order) in the cart at today's prices. Items no longer in the
+ * catalog are left out. Returns null when there is nothing to reorder.
+ */
+export async function reorderFromAi({ tenant, participant }) {
+  const { rows: [a] } = await query(`
+    SELECT * FROM ai_actions WHERE participant_id=$1 AND type='REORDER_NUDGE' AND status='DONE' AND executed_at > now() - interval '7 days'
+     ORDER BY executed_at DESC LIMIT 1`, [participant.id]);
+  if (!a?.payload?.basket?.length) return null;
+  const items = await catalog(tenant.id);
+  const bySku = Object.fromEntries(items.map((p) => [p.sku, p]));
+  const list = a.payload.basket.filter((b) => bySku[b.sku] && b.qty > 0)
+    .map((b) => ({ productId: bySku[b.sku].id, sku: b.sku, name: bySku[b.sku].name, qty: Math.round(b.qty), pricePaise: Number(bySku[b.sku].price_paise) }));
+  if (!list.length) return null;
+  const cart = await tx(async (db) => {
+    const c = await ensureCart(db, tenant.id, participant.id);
+    const { rows: [u] } = await db.query(`UPDATE orders SET items=$2, total_paise=$3, ai_action_id=$4, updated_at=now() WHERE id=$1 RETURNING *`, [c.id, JSON.stringify(list), total(list), a.id]);
+    return u;
+  });
+  return { cart, action: a };
+}
+
 export async function confirm({ tenant, participant }) {
   return tx(async (db) => {
     const { rows: [c] } = await db.query(`SELECT * FROM orders WHERE participant_id=$1 AND status='CART' FOR UPDATE`, [participant.id]);

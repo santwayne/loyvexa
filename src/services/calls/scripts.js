@@ -14,6 +14,12 @@ const T = {
     pa: { first: 'Sat Sri Akal {name} ji, {brand} ton call hai. Tuhade layi scheme chal rahi hai: {scheme}.', goal: 'Scheme di last date te agla slab dasso.' },
     en: { first: 'Hello {name}, this is {brand}. There is a scheme running for you: {scheme}.', goal: 'Explain the end date and the next slab. Answer questions; no pressure.' },
   },
+  // Used by the AI Channel Manager for dealers who stopped ordering.
+  DEALER_WINBACK: {
+    hi: { first: 'Namaste {name} ji, main {brand} ki taraf se bol rahi hoon. Kaafi dinon se aapka order nahi aaya — sab theek hai?', goal: 'Pyaar se poocho order kyun ruka: stock abhi bhi hai, rate ka issue, delivery late, payment, ya competitor. Unki baat dhyan se suno aur summary mein likho. Agar order dena chahte hain toh batao ki WhatsApp pe "order" likh kar seedha order de sakte hain. Pressure mat dalo, discount promise mat karo.' },
+    pa: { first: 'Sat Sri Akal {name} ji, main {brand} vallon gall kar rahi haan. Kaafi dinaan ton tuhada order nahi aaya — sab theek hai?', goal: 'Puchho order kyon rukeya: stock, rate, delivery, payment ja koi hor company. Summary vich likho. Order dena hove taan WhatsApp te "order" likh ke de sakde ne. Discount da vaada na karo.' },
+    en: { first: 'Hello {name}, this is {brand} calling. We haven\'t had an order from you in a while — is everything okay?', goal: 'Ask kindly why ordering stopped: stock still on hand, price, late delivery, payment, or a competitor. Listen and summarise. If they want to order, tell them they can send "order" on WhatsApp. No pressure and no discount promises.' },
+  },
   FEEDBACK: {
     hi: { first: 'Namaste {name} ji, {brand} se bol rahi hoon. Do minute mein aapka feedback chahiye.', goal: 'Poocho: product quality, scheme samajh aayi ya nahi, payment time pe mila ya nahi. Summary mein unki baat likho.' },
     pa: { first: 'Sat Sri Akal {name} ji, {brand} ton. Do minute tuhada feedback chahida.', goal: 'Product quality, scheme, payment bare puchho.' },

@@ -13,7 +13,8 @@
     "test:e2e2": "node scripts/e2e-phase2.js",
     "seed:demo2": "node scripts/seed-demo-phase2.js",
     "test:e2e3": "node scripts/e2e-phase3.js",
-    "seed:demo3": "node scripts/seed-demo-phase3.js"
+    "seed:demo3": "node scripts/seed-demo-phase3.js",
+    "test:e2e4": "node scripts/e2e-phase4.js"
   },
   "license": "ISC",
   "type": "module",
