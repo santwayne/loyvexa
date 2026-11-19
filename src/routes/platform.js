@@ -44,7 +44,7 @@ r.post('/platform/tenants', requireAdmin('SUPER_ADMIN'), ah(async (req, res) => 
 
 r.get('/platform/tenants', requireAdmin('SUPER_ADMIN'), ah(async (req, res) => {
   const { rows } = await query(`
-    SELECT t.id, t.name, t.slug, t.status, t.created_at,
+    SELECT t.id, t.name, t.slug, t.status, t.created_at, t.hub_business_id, t.brand_color,
       (SELECT count(*) FROM participants p WHERE p.tenant_id=t.id) AS participants,
       (SELECT count(*) FROM qr_codes q WHERE q.tenant_id=t.id AND q.status='SCANNED') AS scans
     FROM tenants t ORDER BY t.created_at DESC`);

@@ -27,6 +27,14 @@ export const config = {
     wayneringApiKey: process.env.WAYNERING_API_KEY || '',
     webhookSecret: process.env.CALL_WEBHOOK_SECRET || '',
   },
+  // Regulars hub (one platform): the hub creates brands, pauses them when the
+  // bundle lapses, and signs the owner in. Same secret as HUB_SECRET_LOYVEXA
+  // on the Regulars server (32+ characters). Empty = hub endpoints switched off.
+  hub: {
+    secret: process.env.HUB_SECRET || '',
+    issuer: 'regulars-hub',
+    audience: 'loyvexa',
+  },
   korvo: {
     baseUrl: process.env.KORVO_BASE_URL || '',
     apiKey: process.env.KORVO_API_KEY || '',
