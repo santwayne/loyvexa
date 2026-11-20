@@ -1,0 +1,63 @@
+/* Loopdesk AI design system: shared tokens + top bar. Same file in all 7 tools.
+   Rules and previews: https://claude.ai/artifact/S35zphB6KkUF7PJigt6xVZ */
+:root {
+  --ld-brand: #b8142f;
+  --ld-brand-hover: #8f0e24;
+  --ld-brand-bar: #a3122a;
+  --ld-on-bar: #ffffff;
+  --ld-on-bar-muted: #ffd2d9;
+  --ld-brand-soft: #fbeeee;
+  --ld-brand-ink: #7d0b1e;
+  --ld-surface: #f9fafb;
+  --ld-surface-raised: #ffffff;
+  --ld-surface-sunken: #f3f4f6;
+  --ld-line: #e5e7eb;
+  --ld-control-border: #878e99;
+  --ld-ink: #111827;
+  --ld-ink-muted: #4b5563;
+  --ld-ink-subtle: #6b7280;
+  --ld-success: #15803d;
+  --ld-success-soft: #dcfce7;
+  --ld-warning: #92400e;
+  --ld-warning-soft: #fef3c7;
+  --ld-danger: #991b1b;
+  --ld-danger-soft: #fee2e2;
+  --ld-info: #1d4ed8;
+  --ld-info-soft: #dbeafe;
+  --ld-font: "IBM Plex Sans", "Noto Sans Devanagari", "Noto Sans Gurmukhi", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ld-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.ld-header { background: var(--ld-brand-bar); color: var(--ld-on-bar); font-family: var(--ld-font); position: relative; z-index: 40; }
+.ld-header * { box-sizing: border-box; }
+.ld-header-inner { max-width: 1152px; margin: 0 auto; min-height: 56px; padding: 10px 24px; display: flex; flex-wrap: wrap; align-items: center; column-gap: 24px; row-gap: 8px; }
+.ld-header-left { display: flex; align-items: center; gap: 8px; }
+.ld-wordmark { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: -0.01em; color: var(--ld-on-bar); text-decoration: none; }
+.ld-logo-tile { width: 36px; height: 36px; border-radius: 10px; background: #fff; display: grid; place-items: center; flex: none; }
+.ld-logo-tile img { width: 30px; height: 30px; object-fit: contain; display: block; }
+.ld-header-sep { color: var(--ld-on-bar-muted); font-size: 18px; }
+.ld-header-tool { font-weight: 500; font-size: 16px; color: var(--ld-on-bar); white-space: nowrap; }
+.ld-switcher-anchor { position: relative; }
+.ld-switcher-btn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9999px; border: 0; background: transparent; color: var(--ld-on-bar); cursor: pointer; }
+.ld-switcher-btn:hover, .ld-switcher-btn[aria-expanded="true"] { background: var(--ld-brand-hover); box-shadow: inset 0 0 0 1px var(--ld-on-bar-muted); }
+.ld-nav { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+.ld-nav-item { padding: 6px 16px; border-radius: 9999px; color: var(--ld-on-bar-muted); text-decoration: none; font-weight: 500; font-size: 14px; line-height: 20px; white-space: nowrap; }
+.ld-nav-item:hover { color: var(--ld-on-bar); box-shadow: inset 0 0 0 1px var(--ld-on-bar-muted); }
+.ld-nav-item.is-active { background: #fff; color: var(--ld-brand-hover); }
+.ld-header-right { display: flex; align-items: center; gap: 16px; margin-left: auto; font-size: 14px; color: var(--ld-on-bar-muted); }
+.ld-header-biz { color: var(--ld-on-bar); font-weight: 500; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld-link-btn { font: inherit; font-weight: 500; background: none; border: 0; padding: 0; color: var(--ld-on-bar-muted); cursor: pointer; }
+.ld-link-btn:hover { color: var(--ld-on-bar); }
+.ld-header :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (max-width: 1023px) { .ld-nav { order: 9; width: 100%; flex: none; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; } }
+@media (max-width: 639px) { .ld-header-inner { padding: 10px 16px; } .ld-header-biz { display: none; } }
+
+.ld-switcher { position: absolute; top: 40px; left: 0; z-index: 50; width: 340px; max-width: calc(100vw - 32px); background: #fff; color: var(--ld-ink); border: 1px solid var(--ld-line); border-radius: 20px; box-shadow: 0 8px 24px rgba(17,24,39,0.12); padding: 12px; }
+.ld-switcher-head { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--ld-ink-subtle); padding: 0 8px 8px; }
+.ld-switcher-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.ld-switcher-item { display: block; padding: 8px 12px; border-radius: 10px; text-decoration: none; color: var(--ld-ink); }
+.ld-switcher-item:hover { background: var(--ld-surface-sunken); }
+.ld-switcher-item.is-current { background: var(--ld-brand-soft); }
+.ld-switcher-item.is-current .ld-switcher-name { color: var(--ld-brand-ink); }
+.ld-switcher-name { display: block; font-weight: 600; font-size: 14px; line-height: 20px; }
+.ld-switcher-blurb { display: block; font-size: 12px; line-height: 16px; color: var(--ld-ink-subtle); }

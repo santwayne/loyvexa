@@ -6,31 +6,34 @@
 <meta name="theme-color" content="#E85D04">
 <link rel="manifest" href="manifest.json">
 <title>Rewards</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap">
 <style>
-  :root { --brand:#E85D04; --ink:#1b1b1b; --muted:#6b6b6b; --bg:#f5f4f1; --card:#fff; --ok:#1a7f37; --bad:#c62828; }
+  /* Loopdesk AI design system: font, shapes and neutrals. --brand is the manufacturer's own colour (set from the API). */
+  :root { --brand:#E85D04; --ink:#111827; --muted:#4b5563; --bg:#f9fafb; --card:#fff; --ok:#15803d; --bad:#991b1b; --line:#e5e7eb; --control:#878e99; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent }
-  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Devanagari",sans-serif; background:var(--bg); color:var(--ink) }
+  body { margin:0; font-family:"IBM Plex Sans","Noto Sans Devanagari",system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink) }
   .wrap { max-width:460px; margin:0 auto; min-height:100vh; padding:18px 16px 96px }
   header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px }
   .brand { font-weight:800; color:var(--brand); font-size:18px }
-  .lang { border:1px solid #ddd; background:#fff; border-radius:20px; padding:6px 12px; font-size:13px }
-  .card { background:var(--card); border-radius:18px; padding:18px; box-shadow:0 1px 10px rgba(0,0,0,.05); margin-bottom:14px }
+  .lang { border:1px solid var(--control); background:#fff; border-radius:9999px; padding:6px 14px; font-size:13px }
+  .card { background:var(--card); border-radius:14px; padding:18px; border:1px solid var(--line); box-shadow:0 1px 2px rgba(17,24,39,.06); margin-bottom:14px }
   .bal { background:var(--brand); color:#fff }
   .bal .pts { font-size:44px; font-weight:800; line-height:1.1 }
   .bal .sub { opacity:.9; font-size:14px }
   h2 { font-size:17px; margin:0 0 12px }
   label { display:block; font-size:13px; color:var(--muted); margin:12px 0 6px }
-  input, select { width:100%; font-size:17px; padding:13px 14px; border:1px solid #ddd; border-radius:12px; background:#fff }
-  button.primary { width:100%; background:var(--brand); color:#fff; border:0; border-radius:14px; padding:15px; font-size:17px; font-weight:700; margin-top:14px }
-  button.ghost { width:100%; background:#fff; color:var(--ink); border:1px solid #ddd; border-radius:14px; padding:13px; font-size:15px; margin-top:10px }
+  input, select { width:100%; font-size:17px; padding:13px 14px; border:1px solid var(--control); border-radius:10px; background:#fff }
+  button.primary { width:100%; background:var(--brand); color:#fff; border:0; border-radius:9999px; padding:15px; font-size:17px; font-weight:600; margin-top:14px }
+  button.ghost { width:100%; background:#fff; color:var(--ink); border:1px solid var(--control); border-radius:9999px; padding:13px; font-size:15px; margin-top:10px }
   button:disabled { opacity:.6 }
-  .scanbtn { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); width:min(428px,calc(100% - 32px)); background:var(--brand); color:#fff; border:0; border-radius:18px; padding:18px; font-size:19px; font-weight:800; box-shadow:0 6px 20px rgba(0,0,0,.18) }
-  .row { display:flex; justify-content:space-between; align-items:center; padding:11px 0; border-bottom:1px solid #f0f0f0; font-size:15px }
+  .scanbtn { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); width:min(428px,calc(100% - 32px)); background:var(--brand); color:#fff; border:0; border-radius:9999px; padding:18px; font-size:19px; font-weight:700; box-shadow:0 6px 20px rgba(0,0,0,.18) }
+  .row { display:flex; justify-content:space-between; align-items:center; padding:11px 0; border-bottom:1px solid var(--line); font-size:15px }
   .row:last-child { border-bottom:0 }
   .plus { color:var(--ok); font-weight:700 } .minus { color:var(--bad); font-weight:700 }
   .muted { color:var(--muted); font-size:13px }
   .err { color:var(--bad); font-size:14px; margin-top:10px; min-height:18px }
-  .tabs { display:flex; gap:8px; margin-bottom:14px } .tabs button { flex:1; border:1px solid #ddd; background:#fff; border-radius:12px; padding:10px; font-size:14px }
+  .tabs { display:flex; gap:8px; margin-bottom:14px } .tabs button { flex:1; border:1px solid var(--control); background:#fff; border-radius:9999px; padding:10px; font-size:14px }
   .tabs button.on { background:var(--ink); color:#fff; border-color:var(--ink) }
   #camWrap { position:fixed; inset:0; background:#000; z-index:20; display:none; flex-direction:column }
   #camWrap video { flex:1; width:100%; object-fit:cover }
@@ -40,7 +43,7 @@
   .result { text-align:center } .result .big { font-size:56px } .result h3 { margin:6px 0; font-size:22px }
   .hidden { display:none !important }
   .tabs button { font-size:13px; padding:10px 4px }
-  .scheme { padding:12px 0; border-bottom:1px solid #f0f0f0 } .scheme:last-child { border-bottom:0 }
+  .scheme { padding:12px 0; border-bottom:1px solid var(--line) } .scheme:last-child { border-bottom:0 }
   .bar { height:8px; background:#eee; border-radius:6px; margin:8px 0; overflow:hidden } .bar div { height:100%; background:var(--brand) }
 </style>
 </head>

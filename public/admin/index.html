@@ -2,65 +2,79 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Loyvexa · Brand Console</title>
-<link rel="icon" type="image/png" href="loyvexa-logo.png">
+<title>Loyvexa · Loopdesk AI</title>
+<link rel="icon" type="image/png" href="/admin/brand/favicon.png">
+<link rel="apple-touch-icon" href="/admin/brand/apple-touch-icon.png">
+<meta name="theme-color" content="#a3122a">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400&family=Noto+Sans+Devanagari:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="loopdesk.css">
 <style>
-  :root { --brand:#E85D04; --ink:#1c1c1c; --muted:#6e6e6e; --line:#ececec; --bg:#f7f6f3; --ok:#1a7f37; --bad:#c62828; --warn:#b26a00 }
-  * { box-sizing:border-box } body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg) }
-  .login { max-width:360px; margin:12vh auto; background:#fff; padding:28px; border-radius:16px; box-shadow:0 2px 16px rgba(0,0,0,.06) }
-  .login h1 { margin:0 0 4px; font-size:22px } .login .brandlogo { display:block; width:200px; max-width:100%; height:auto; margin:0 0 8px } .login p { color:var(--muted); margin:0 0 18px }
-  input, select, textarea { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:10px; font:inherit; background:#fff }
-  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px }
-  button { font:inherit; border-radius:10px; padding:9px 14px; border:1px solid #ddd; background:#fff; cursor:pointer }
-  button.p { background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600 }
-  button.sm { padding:5px 10px; font-size:13px } button.danger { color:var(--bad) }
-  .app { display:grid; grid-template-columns:220px 1fr; min-height:100vh }
-  nav { background:#151515; color:#ddd; padding:20px 12px } nav .logo { margin:0 10px 10px; padding:8px 10px; background:#fff; border-radius:10px; width:fit-content } nav .logo img { display:block; width:140px; height:auto } nav .tenant { color:#999; font-size:12px; padding:0 10px 18px }
-  nav a { display:block; padding:9px 10px; border-radius:8px; color:#cfcfcf; text-decoration:none; cursor:pointer } nav a.on, nav a:hover { background:#262626; color:#fff }
-  nav .badge { float:right; background:var(--brand); color:#fff; border-radius:10px; padding:0 7px; font-size:12px }
-  main { padding:24px 28px; overflow:auto } h2 { margin:0 0 16px; font-size:20px }
+  /* Loopdesk AI design system (same in all 7 tools): crimson, white and gray, IBM Plex, pill buttons.
+     The brand's own colour (tenant.brand_color) is for its dealer app, not this console. */
+  :root { --brand:#b8142f; --brand-hover:#8f0e24; --brand-soft:#fbeeee; --brand-ink:#7d0b1e; --ink:#111827; --muted:#4b5563; --subtle:#6b7280; --line:#e5e7eb; --control:#878e99; --bg:#f9fafb; --ok:#15803d; --bad:#991b1b; --warn:#92400e }
+  * { box-sizing:border-box } body { margin:0; font:14px/1.45 var(--ld-font); color:var(--ink); background:var(--bg) }
+  .login { max-width:380px; margin:12vh auto; background:#fff; padding:28px; border-radius:20px; border:1px solid var(--line); box-shadow:0 1px 2px rgba(17,24,39,.06) }
+  .login h1 { margin:0 0 4px; font-size:16px; font-weight:700; display:flex; align-items:center; gap:10px } .login h1 img { width:36px; height:36px } .login h1 span { color:var(--muted); font-weight:500 }
+  .login h2 { margin:20px 0 4px; font-size:24px; font-weight:600; letter-spacing:-.01em } .login p { color:var(--muted); margin:0 0 18px }
+  input, select, textarea { width:100%; padding:10px 12px; border:1px solid var(--control); border-radius:10px; font:inherit; background:#fff; color:var(--ink) }
+  input::placeholder, textarea::placeholder { color:var(--subtle) }
+  :focus-visible { outline:2px solid var(--brand); outline-offset:2px }
+  label { display:block; font-size:13px; font-weight:500; color:var(--ink); margin:12px 0 6px }
+  button { font:inherit; font-weight:500; border-radius:9999px; padding:8px 16px; border:1px solid var(--control); background:#fff; color:var(--ink); cursor:pointer }
+  button:hover { background:#f3f4f6 }
+  button.p { background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600 } button.p:hover { background:var(--brand-hover); border-color:var(--brand-hover) }
+  button.sm { padding:4px 12px; font-size:13px } button.danger { color:var(--bad); border-color:var(--bad) } button.danger:hover { background:#fee2e2 }
+  .app { display:grid; grid-template-columns:240px 1fr; min-height:calc(100vh - 56px) }
+  nav { background:#fff; border-right:1px solid var(--line); padding:16px 12px } nav .tenant { color:var(--subtle); font-size:12px; font-weight:500; padding:4px 12px 14px }
+  nav a { display:block; padding:8px 14px; margin-bottom:2px; border-radius:9999px; color:var(--muted); font-weight:500; text-decoration:none; cursor:pointer } nav a:hover { background:#f3f4f6; color:var(--ink) } nav a.on { background:var(--brand-soft); color:var(--brand-ink) }
+  nav .badge { float:right; background:var(--brand); color:#fff; border-radius:9999px; padding:0 7px; font-size:12px; font-weight:600 }
+  main { padding:24px 28px; overflow:auto } h2 { margin:0 0 16px; font-size:24px; font-weight:600; letter-spacing:-.01em }
   .kpis { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; margin-bottom:18px }
-  .kpi { background:#fff; border-radius:14px; padding:14px 16px; border:1px solid var(--line) } .kpi .v { font-size:24px; font-weight:750 } .kpi .l { color:var(--muted); font-size:12px }
-  .panel { background:#fff; border-radius:14px; border:1px solid var(--line); padding:16px; margin-bottom:16px }
-  .panel h3 { margin:0 0 12px; font-size:15px } .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px }
-  table { width:100%; border-collapse:collapse } th, td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:middle }
-  th { font-size:12px; color:var(--muted); font-weight:600 } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums }
-  .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:12px; background:#f0f0f0 }
-  .pill.ok { background:#e6f4ea; color:var(--ok) } .pill.bad { background:#fdecea; color:var(--bad) } .pill.warn { background:#fff4e0; color:var(--warn) }
+  .kpi { background:#fff; border-radius:14px; padding:14px 16px; border:1px solid var(--line); box-shadow:0 1px 2px rgba(17,24,39,.06) } .kpi .v { font-size:28px; font-weight:600; font-variant-numeric:tabular-nums } .kpi .l { color:var(--muted); font-size:13px }
+  .panel { background:#fff; border-radius:14px; border:1px solid var(--line); padding:16px 20px; margin-bottom:16px }
+  .panel h3 { margin:0 0 12px; font-size:18px; font-weight:600 } .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px }
+  table { width:100%; border-collapse:collapse } th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:middle }
+  th { font-size:12px; color:var(--muted); font-weight:500; background:#f3f4f6 } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums }
+  .pill { display:inline-block; padding:2px 10px; border-radius:9999px; font-size:12px; font-weight:500; background:#f3f4f6; color:var(--muted) }
+  .pill.ok { background:#dcfce7; color:var(--ok) } .pill.bad { background:#fee2e2; color:var(--bad) } .pill.warn { background:#fef3c7; color:var(--warn) }
   .row { display:flex; gap:10px; align-items:end; flex-wrap:wrap } .row > div { flex:1; min-width:140px }
   .muted { color:var(--muted) } .err { color:var(--bad); margin-top:8px; min-height:18px }
-  .bars { display:flex; align-items:flex-end; gap:3px; height:140px; padding-top:8px } .bars div { flex:1; background:var(--brand); border-radius:3px 3px 0 0; min-height:2px; opacity:.85 }
+  .bars { display:flex; align-items:flex-end; gap:3px; height:140px; padding-top:8px } .bars div { flex:1; background:#d4183a; border-radius:3px 3px 0 0; min-height:2px }
   .hidden { display:none !important }
-  .seg { display:inline-block; padding:2px 8px; border-radius:20px; font-size:11.5px; font-weight:600 } .seg.NEW { background:#e8f0fe; color:#1a4fb3 } .seg.REGULAR { background:#e6f4ea; color:#1a7f37 } .seg.HIGH_SPENDER { background:#fff1d6; color:#8a5a00 } .seg.AT_RISK { background:#fff4e0; color:#b26a00 } .seg.DORMANT { background:#fdecea; color:#c62828 }
+  .seg { display:inline-block; padding:2px 10px; border-radius:9999px; font-size:12px; font-weight:500 } .seg.NEW { background:#dbeafe; color:#1d4ed8 } .seg.REGULAR { background:#dcfce7; color:#15803d } .seg.HIGH_SPENDER { background:#f3e8ff; color:#6b21a8 } .seg.AT_RISK { background:#fef3c7; color:#92400e } .seg.DORMANT { background:#fee2e2; color:#991b1b }
   .slabrow { display:grid; grid-template-columns:1fr 1fr 1fr 1fr auto; gap:8px; margin-top:8px }
-  .key { font-family:ui-monospace,Menlo,monospace; background:#fff8e1; border:1px dashed #e0b000; padding:10px; border-radius:10px; word-break:break-all }
-  .chat { max-width:520px; background:#ece5dd; border-radius:12px; padding:12px; height:420px; overflow:auto; display:flex; flex-direction:column; gap:6px }
+  .key { font-family:var(--ld-font-mono); background:#fef3c7; border:1px dashed #b45309; padding:10px; border-radius:10px; word-break:break-all }
+  .chat { max-width:520px; background:#ece5dd; border-radius:14px; padding:12px; height:420px; overflow:auto; display:flex; flex-direction:column; gap:6px }
   .bub { max-width:85%; padding:8px 10px; border-radius:10px; white-space:pre-wrap; font-size:13.5px; box-shadow:0 1px 1px rgba(0,0,0,.08) }
   .bub.in { align-self:flex-end; background:#dcf8c6 } .bub.out { align-self:flex-start; background:#fff }
-  code { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; background:#f4f4f4; padding:1px 5px; border-radius:5px }
-  pre { background:#f6f6f6; padding:12px; border-radius:10px; overflow:auto; font-size:12.5px }
+  code { font-family:var(--ld-font-mono); font-size:12.5px; background:#f3f4f6; padding:1px 5px; border-radius:6px }
+  pre { background:#f3f4f6; padding:12px; border-radius:10px; overflow:auto; font-size:12.5px; font-family:var(--ld-font-mono) }
   .aicards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px }
-  .aic { background:#fff; border:1px solid var(--line); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:8px }
-  .aic .t { display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:12px } .aic h4 { margin:0; font-size:14.5px } .aic .why { color:var(--muted); font-size:13px }
-  .aic .msg { background:#f6f3ee; border-radius:10px; padding:8px 10px; white-space:pre-wrap; font-size:13px } .aic textarea { min-height:110px; font-size:13px }
+  .aic { background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:8px }
+  .aic .t { display:flex; gap:6px; flex-wrap:wrap; align-items:center; font-size:12px } .aic h4 { margin:0; font-size:15px; font-weight:600 } .aic .why { color:var(--muted); font-size:13px }
+  .aic .msg { background:#f9fafb; border:1px solid var(--line); border-radius:10px; padding:8px 10px; white-space:pre-wrap; font-size:13px } .aic textarea { min-height:110px; font-size:13px }
   .aic .acts { display:flex; gap:6px; flex-wrap:wrap; margin-top:auto } .aic .n { width:22px; height:22px; border-radius:50%; background:var(--brand); color:#fff; display:inline-grid; place-items:center; font-size:12px; font-weight:700 }
-  .aistrip { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; background:linear-gradient(135deg,#14213d,#1d3557); color:#fff; border-radius:16px; padding:16px; margin-bottom:18px }
-  .aistrip .v { font-size:22px; font-weight:750 } .aistrip .l { font-size:12px; color:#c9d3e6 } .aistrip a { color:#ffb37a; cursor:pointer; text-decoration:underline }
-  @media (max-width:800px) { .app { grid-template-columns:1fr } nav { display:flex; overflow:auto; gap:4px } nav .logo, nav .tenant { display:none } .grid2 { grid-template-columns:1fr } }
+  .aistrip { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; background:var(--brand-soft); color:var(--ink); border:1px solid #ffd2d9; border-radius:14px; padding:16px; margin-bottom:18px }
+  .aistrip .v { font-size:24px; font-weight:600 } .aistrip .l { font-size:12px; color:var(--brand-ink) } .aistrip a { color:var(--brand); font-weight:500; cursor:pointer; text-decoration:underline }
+  @media (max-width:800px) { .app { grid-template-columns:1fr } nav { display:flex; overflow:auto; gap:4px; border-right:0; border-bottom:1px solid var(--line) } nav .tenant { display:none } nav a { white-space:nowrap } .grid2 { grid-template-columns:1fr } }
 </style>
 </head>
 <body>
 <div id="loginView" class="login">
-  <h1><img class="brandlogo" src="loyvexa-logo.png" alt="Loyvexa"></h1><p>Brand console</p>
+  <h1><img src="/admin/brand/icon-512.png" alt="">Loopdesk AI <span>/ Loyvexa</span></h1>
+  <h2>Log in</h2><p>Brand console</p>
   <label>Email</label><input id="email" type="email" autocomplete="username">
   <label>Password</label><input id="password" type="password" autocomplete="current-password">
   <button class="p" style="width:100%;margin-top:16px" id="loginBtn">Log in</button>
   <div class="err" id="loginErr"></div>
 </div>
 
-<div id="appView" class="app hidden">
+<div id="appView" class="hidden">
+<div id="ldHeader" data-tool="loyvexa" data-logo="/admin/brand/icon-512.png"></div>
+<div class="app">
   <nav>
-    <div class="logo"><img src="loyvexa-logo.png" alt="Loyvexa"></div><div class="tenant" id="tenantName"></div>
+    <div class="tenant" id="tenantName"></div>
     <div id="tenantPick" class="hidden" style="padding:0 6px 14px"><select id="tenantSelect"></select></div>
     <a data-v="brands" id="brandsNav" class="hidden">Brands</a>
     <a data-v="dashboard" class="on">Dashboard</a>
@@ -83,6 +97,8 @@
   </nav>
   <main id="main"></main>
 </div>
+</div>
+<script src="loopdesk-header.js"></script>
 <script src="admin.js"></script>
 </body>
 </html>
