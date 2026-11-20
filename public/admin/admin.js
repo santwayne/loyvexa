@@ -45,6 +45,7 @@ document.querySelectorAll('nav a[data-v]').forEach((a) => a.onclick = () => { vi
 async function boot() {
   if (!token) return;
   $('loginView').classList.add('hidden'); $('appView').classList.remove('hidden');
+  if (window.LoopdeskHeader) LoopdeskHeader.onLogout(logout);
   if (user.role === 'SUPER_ADMIN') {
     const { tenants } = await api('/api/platform/tenants');
     $('brandsNav').classList.remove('hidden');
@@ -57,7 +58,10 @@ async function boot() {
   } else tenantId = user.tenantId;
   const { tenant } = await api('/api/admin/tenant');
   $('tenantName').textContent = `${tenant.name} · ${user.name}`;
-  document.documentElement.style.setProperty('--brand', tenant.brand_color || '#E85D04');
+  // Loopdesk AI top bar: business name + log out. The console keeps the Loopdesk colours;
+  // the brand's own colour (tenant.brand_color) is for its dealer app, kept in --tenant for previews.
+  if (window.LoopdeskHeader) { LoopdeskHeader.setBusiness(tenant.name); LoopdeskHeader.onLogout(logout); }
+  document.documentElement.style.setProperty('--tenant', tenant.brand_color || '#E85D04');
   render();
 }
 

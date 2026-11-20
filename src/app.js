@@ -27,7 +27,8 @@ export function createApp() {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", 'https://unpkg.com', "'unsafe-inline'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], // IBM Plex (Loopdesk AI design system)
+        fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
         imgSrc: ["'self'", 'data:', 'https:'],
         connectSrc: ["'self'"],
         mediaSrc: ["'self'", 'blob:'],
