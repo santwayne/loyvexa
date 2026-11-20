@@ -3,7 +3,7 @@ import { query } from '../db/pool.js';
 import { sha256 } from '../lib/codes.js';
 import { config } from '../config.js';
 import { badRequest, AppError } from '../lib/errors.js';
-import { channelForTenant, sendTemplate } from './whatsapp.js';
+import { senderFor, sendTemplate } from './whatsapp.js';
 
 const TTL_MIN = 10;
 const MAX_ATTEMPTS = 5;
@@ -15,8 +15,8 @@ const MAX_ATTEMPTS = 5;
 async function deliver({ tenantId, mobile, code }) {
   if (config.otpDevMode) return;
   // WhatsApp "Authentication" category template with one body param {{1}} = code and a copy-code button.
-  const channel = await channelForTenant(tenantId);
-  const tpl = channel?.config?.otpTemplate;
+  // Bundle brands: the OTP goes from the Regulars number (rule 4).
+  const tpl = (await senderFor(tenantId)).template('otp');
   if (!tpl) throw new AppError(503, 'OTP_CHANNEL_MISSING', 'OTP delivery is not configured for this brand yet');
   await sendTemplate({ tenantId, to: mobile, name: tpl.name || tpl, language: tpl.language || 'en', params: [code], buttonParam: code, previewText: '[OTP sent]' });
 }

@@ -1,5 +1,6 @@
 import { settingsOf } from '../tenants.js';
 import { normalizeMobile } from '../../lib/codes.js';
+import { hasWayneRing } from '../bundle.js';
 
 /**
  * AI Channel Manager — shared definitions.
@@ -11,6 +12,18 @@ import { normalizeMobile } from '../../lib/codes.js';
  * checks, two weeks later, whether each one worked.
  */
 export const ACTION_TYPES = ['REORDER_NUDGE', 'SLAB_PUSH', 'WINBACK_CALL', 'MECHANIC_NUDGE', 'PAYMENT_REMINDER', 'FRAUD_REVIEW', 'SCHEME_IDEA'];
+
+/**
+ * Bundle rule (Nov 2026): the AI Manager keeps only loyalty work.
+ *   Stay:  scheme slab push, mechanic nudge, fraud hold, scheme idea,
+ *          win-back AI call (only with WayneRing in the package).
+ *   Moved: reorder nudge → Regulars (with Korvo data); payment reminder →
+ *          Korvo decides, Regulars sends. Old rows of these types stay for history.
+ */
+export const MOVED_OUT = { REORDER_NUDGE: 'Reorder reminders are sent by Regulars now', PAYMENT_REMINDER: 'Payment reminders are decided by Korvo and sent by Regulars now' };
+export const LOYALTY_ACTIONS = ['SLAB_PUSH', 'MECHANIC_NUDGE', 'FRAUD_REVIEW', 'SCHEME_IDEA', 'WINBACK_CALL'];
+/** The action types this brand's AI Manager may plan. */
+export const actionTypesFor = (tenant) => LOYALTY_ACTIONS.filter((t) => t !== 'WINBACK_CALL' || hasWayneRing(tenant));
 
 export const LABEL = {
   REORDER_NUDGE: { one: 'Reorder reminder', many: 'reorder reminders', hi: 'reorder yaad dilana' },

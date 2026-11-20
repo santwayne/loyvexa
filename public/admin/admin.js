@@ -11,6 +11,8 @@ let token = store.get('wl_admin_token');
 let user = JSON.parse(store.get('wl_admin_user') || 'null');
 let tenantId = store.get('wl_admin_tenant');
 let view = 'dashboard';
+// Bundle rules for this brand (from the server): which pages it gets.
+let bundle = { calls: true, korvo: false, whatsappSetupHere: true, whatsappViaRegulars: false };
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -55,7 +57,12 @@ async function boot() {
     $('tenantSelect').onchange = () => { tenantId = $('tenantSelect').value; store.set('wl_admin_tenant', tenantId); render(); };
     if (!tenantId) { view = 'brands'; document.querySelectorAll('nav a').forEach((x) => x.classList.toggle('on', x.dataset.v === 'brands')); render(); return; }
   } else tenantId = user.tenantId;
-  const { tenant } = await api('/api/admin/tenant');
+  const t = await api('/api/admin/tenant');
+  const tenant = t.tenant;
+  if (t.bundle) bundle = t.bundle;
+  // Calls only through WayneRing, and only when it is in the package.
+  document.querySelector('nav a[data-v="calls"]').classList.toggle('hidden', !bundle.calls);
+  if (view === 'calls' && !bundle.calls) view = 'dashboard';
   $('tenantName').textContent = `${tenant.name} · ${user.name}`;
   document.documentElement.style.setProperty('--brand', tenant.brand_color || '#E85D04');
   render();
@@ -89,7 +96,7 @@ views.dashboard = async () => {
   const tile = (v, l) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`;
   $('main').innerHTML = `<h2>Dashboard</h2>
   <div class="kpis">
-    ${tile(num(k.participants), 'Participants')}${tile(num(k.active_30d), 'Active (30 days)')}${tile(num(k.dormant), 'Dormant (30+ days)')}
+    ${tile(num(k.participants), 'Participants')}${tile(num(k.active_30d), 'Active (30 days)')}${tile(num(k.dormant), `Dormant (${k.dormant_days || 45}+ days)`)}
     ${tile(num(k.scans_today), 'Scans today')}${tile(`${num(k.codes_scanned)} / ${num(k.codes_generated)}`, 'Codes scanned / printed')}
     ${tile(num(k.points_issued), 'Points issued')}${tile(num(k.points_liability), 'Points outstanding (liability)')}
     ${tile(inr(k.paid_paise), 'Paid out via UPI')}${tile(num(k.pending_redemptions), 'Payouts awaiting approval')}
@@ -420,10 +427,15 @@ views.connectors = async () => {
 
 // ---------- WhatsApp ----------
 views.whatsapp = async () => {
-  const [{ channel, webhookUrl, sendMode }, { messages }] = await Promise.all([api('/api/admin/channels/whatsapp'), api('/api/admin/messages')]);
+  const [{ channel, webhookUrl, sendMode, bundle: wb }, { messages }] = await Promise.all([api('/api/admin/channels/whatsapp'), api('/api/admin/messages')]);
+  const setupHere = !wb || wb.whatsappSetupHere;
   $('main').innerHTML = `<h2>WhatsApp</h2>
   <div class="grid2">
-    <div class="panel"><h3>Number</h3>
+    ${setupHere ? '' : `<div class="panel"><h3>Number</h3>
+      <p>Your WhatsApp number is set up once in <b>Regulars → Settings</b> and shared by all your tools. Loyvexa's bot (points, schemes, orders), OTPs and campaigns go out from that number.</p>
+      ${wb.whatsappViaRegulars ? '<p><span class="pill ok">Connected through Regulars</span></p>' : '<p><span class="pill warn">Waiting for set-up</span> <span class="muted">REGULARS_API_URL is not set on the Loyvexa server yet.</span></p>'}
+      <p class="muted">Mode: <b>${esc(sendMode)}</b>${sendMode === 'mock' ? ' — messages are saved here, not sent.' : ''}</p></div>`}
+    ${setupHere ? `<div class="panel"><h3>Number</h3>
       ${channel ? `<p><span class="pill ok">Connected</span> ${esc(channel.display_number || channel.phone_number_id)}</p>` : '<p><span class="pill warn">Not connected</span></p>'}
       <p class="muted">Mode: <b>${esc(sendMode)}</b>${sendMode === 'mock' ? ' — replies are saved here, not sent. Set WHATSAPP_SEND_MODE=live after Meta approval.' : ''}</p>
       <label>Phone number ID (Meta)</label><input id="wPn" value="${esc(channel?.phone_number_id || '')}">
@@ -431,7 +443,7 @@ views.whatsapp = async () => {
       <label>Permanent access token ${channel?.has_token ? '(saved — leave empty to keep)' : ''}</label><input id="wTok" type="password">
       <label>OTP template name (Authentication)</label><input id="wOtp" value="${esc(channel?.config?.otpTemplate?.name || '')}">
       <button class="p" id="wSave" style="margin-top:12px">Save</button><div class="err" id="wErr"></div>
-      <p class="muted" style="margin-top:12px">Webhook URL for Meta: <code>${esc(webhookUrl)}</code></p></div>
+      <p class="muted" style="margin-top:12px">Webhook URL for Meta: <code>${esc(webhookUrl)}</code></p></div>` : ''}
     <div class="panel"><h3>Try the bot</h3><p class="muted">Type as a dealer or mechanic would (points, 2, scheme, a product code…).</p>
       <div class="row"><div><input id="sFrom" placeholder="Their mobile number"></div></div>
       <div class="chat" id="chat" style="margin-top:10px"></div>
@@ -439,7 +451,7 @@ views.whatsapp = async () => {
   </div>
   <div class="panel"><h3>Recent messages</h3><table><tr><th>When</th><th>Who</th><th></th><th>Message</th><th>Status</th></tr>
     ${messages.slice(0, 60).map((m) => `<tr><td>${dt(m.created_at)}</td><td>${esc(m.participant_name || m.peer)}</td><td>${m.direction === 'IN' ? '⬅️' : '➡️'}</td><td style="white-space:pre-wrap;max-width:520px">${esc((m.body || '').slice(0, 300))}</td><td><span class="pill ${m.status === 'FAILED' ? 'bad' : ''}">${esc(m.status)}</span>${m.error ? `<div class="muted">${esc(m.error)}</div>` : ''}</td></tr>`).join('')}</table></div>`;
-  $('wSave').onclick = async () => {
+  if ($('wSave')) $('wSave').onclick = async () => {
     try {
       await api('/api/admin/channels/whatsapp', { method: 'PUT', body: { phoneNumberId: $('wPn').value.trim(), displayNumber: $('wDn').value || undefined, accessToken: $('wTok').value || undefined, otpTemplate: $('wOtp').value ? { name: $('wOtp').value } : undefined } });
       render();
@@ -475,6 +487,7 @@ views.segments = async () => {
 };
 
 views.calls = async () => {
+  if (!bundle.calls) { $('main').innerHTML = '<h2>AI calls</h2><div class="panel muted">AI calls go out only through WayneRing, and WayneRing is not in your package. Ask Loopdesk to add it.</div>'; return; }
   const { campaigns } = await api('/api/admin/call-campaigns');
   $('main').innerHTML = `<h2>AI calls</h2>
   <div class="panel"><h3>New call campaign</h3><p class="muted">Calls go out through WayneRing in Hindi, Punjabi or English, only during calling hours, never to DND numbers, and at most once a week per person. Calls never change points.</p>
@@ -529,7 +542,7 @@ views.orders = async () => {
 views.campaigns = async () => {
   const [{ campaigns }, { schemes }] = await Promise.all([api('/api/admin/wa-campaigns'), api('/api/admin/schemes')]);
   $('main').innerHTML = `<h2>WhatsApp campaigns</h2>
-  <div class="panel"><h3>New campaign</h3><p class="muted">Uses a template approved in Meta Business Manager. People who sent STOP are never included. Placeholders: <code>{name}</code> <code>{balance}</code> <code>{brand}</code> <code>{scheme_progress}</code> <code>{app_link}</code></p>
+  <div class="panel"><h3>New campaign</h3><p class="muted">${bundle.whatsappSetupHere ? 'Uses a template approved in Meta Business Manager.' : 'You choose who gets it here; it goes out from your Regulars WhatsApp number with a template approved there.'} People who sent STOP are never included. Placeholders: <code>{name}</code> <code>{balance}</code> <code>{brand}</code> <code>{scheme_progress}</code> <code>{app_link}</code></p>
     <div class="row"><div><label>Name</label><input id="wName" placeholder="Diwali scheme launch"></div><div><label>Template name (Meta)</label><input id="wTpl" placeholder="scheme_launch_v1"></div><div><label>Language code</label><input id="wLang" value="hi"></div></div>
     <div class="row"><div><label>Template body params, one per line ({{1}}, {{2}}…)</label><textarea id="wParams" rows="3">{name}\n{scheme_progress}</textarea></div><div><label>Preview text (shown in the message log)</label><textarea id="wPrev" rows="3">Namaste {name}! {scheme_progress}</textarea></div></div>
     <div class="row"><div><label>Segments</label>${multi('wSeg', SEGS, 5)}</div><div><label>Types</label>${multi('wTypes', PT, 5)}</div>
@@ -568,9 +581,9 @@ views.dashboard = async () => {
     strip.innerHTML = `
       <div><div class="v">${num(a.week.waiting)}</div><div class="l">AI actions waiting · <a id="goAi">open</a></div></div>
       <div><div class="v">${inr(a.month.wonPaise)}</div><div class="l">Sales the AI helped bring in (30 days)</div></div>
-      <div><div class="v">${inr(a.korvo.ordersPaise30d)}</div><div class="l">Korvo orders (30 days) · ${num(a.korvo.orderingDealers30d)} dealers</div></div>
-      <div><div class="v">${inr(a.korvo.overduePaise)}</div><div class="l">Overdue payments · ${num(a.korvo.dealersOverdue)} dealers</div></div>
-      <div><div class="v">${inr(a.month.collectedPaise)}</div><div class="l">Recovered after AI reminders (30 days)</div></div>`;
+      ${a.korvo.linked ? `<div><div class="v">${inr(a.korvo.ordersPaise30d)}</div><div class="l">Korvo orders (30 days) · ${num(a.korvo.orderingDealers30d)} dealers</div></div>
+      <div><div class="v">${inr(a.korvo.overduePaise)}</div><div class="l">Overdue payments (from Korvo) · ${num(a.korvo.dealersOverdue)} dealers</div></div>
+      <div><div class="v">${inr(a.month.collectedPaise)}</div><div class="l">Payments recovered (30 days)</div></div>` : ''}`;
     $('main').insertBefore(strip, $('main').children[1]);
     $('goAi').onclick = () => document.querySelector('nav a[data-v="ai"]').click();
     $('aiBadge').textContent = a.week.waiting; $('aiBadge').classList.toggle('hidden', !a.week.waiting);
@@ -582,8 +595,8 @@ views.ai = async () => {
   const s = a.settings;
   $('aiBadge').textContent = a.week.waiting; $('aiBadge').classList.toggle('hidden', !a.week.waiting);
   const card = (x) => `<div class="aic">
-      <div class="t">${x.brief_item ? `<span class="n">${x.brief_item}</span>` : ''}<span class="pill">${esc(a.types.find((t) => t.type === x.type)?.label || x.type)}</span>
-        <span class="pill">${AI_CH[a.types.find((t) => t.type === x.type)?.channel] || ''}</span>${x.expected_paise > 0 ? `<span class="muted">~${inr(x.expected_paise)}</span>` : ''}
+      <div class="t">${x.brief_item ? `<span class="n">${x.brief_item}</span>` : ''}<span class="pill">${esc((a.allTypes || a.types).find((t) => t.type === x.type)?.label || x.type)}</span>
+        <span class="pill">${AI_CH[(a.allTypes || a.types).find((t) => t.type === x.type)?.channel] || ''}</span>${x.expected_paise > 0 ? `<span class="muted">~${inr(x.expected_paise)}</span>` : ''}
         ${x.status === 'APPROVED' ? '<span class="pill ok">approved · sends in contact hours</span>' : ''}${x.autonomy === 'SUGGEST' ? '<span class="pill warn">idea</span>' : ''}</div>
       <h4>${esc(x.title)}</h4><div class="why">${esc(x.reason)}</div>
       ${x.payload?.message ? `<div class="msg" id="m-${x.id}">${esc(x.payload.message)}</div>` : ''}
@@ -593,12 +606,12 @@ views.ai = async () => {
     </div>`;
   const lv = (t) => `<select data-auto="${t.type}">${['SUGGEST', 'APPROVE', 'AUTO'].filter((l) => !(l === 'AUTO' && ['FRAUD_REVIEW', 'SCHEME_IDEA'].includes(t.type))).map((l) => `<option value="${l}" ${s.aiAutonomy[t.type] === l ? 'selected' : ''}>${AI_LEVEL[l]}</option>`).join('')}</select>`;
   $('main').innerHTML = `<h2>AI Channel Manager</h2>
-  <p class="muted" style="margin-top:-8px;max-width:760px">Every morning it reads orders from Korvo, scans, schemes, payments and fraud flags, picks the actions most likely to bring in sales, and asks you on WhatsApp before it contacts anyone. ${s.aiEnabled ? '<b>It is on.</b>' : '<b>It is off</b> — switch it on in the settings below.'}</p>
+  <p class="muted" style="margin-top:-8px;max-width:760px">Every morning it reads purchases, scans, schemes and fraud flags, picks the loyalty actions most likely to bring in sales (scheme slab push, mechanic nudge, fraud hold, scheme idea${a.bundle?.calls ? ', win-back AI call' : ''}), and asks you on WhatsApp before it contacts anyone. Reorder and payment reminders are sent from Regulars. ${s.aiEnabled ? '<b>It is on.</b>' : '<b>It is off</b> — switch it on in the settings below.'}</p>
   <div class="kpis">
     <div class="kpi"><div class="v">${inr(a.week.wonPaise)}</div><div class="l">Sales influenced, 7 days (${num(a.week.won)} wins)</div></div>
     <div class="kpi"><div class="v">${inr(a.month.wonPaise)}</div><div class="l">Sales influenced, 30 days</div></div>
     <div class="kpi"><div class="v">${num(a.week.done)}</div><div class="l">Actions done, 7 days</div></div>
-    <div class="kpi"><div class="v">${inr(a.month.collectedPaise)}</div><div class="l">Payments recovered, 30 days</div></div>
+    ${a.korvo.linked ? `<div class="kpi"><div class="v">${inr(a.month.collectedPaise)}</div><div class="l">Payments recovered, 30 days</div></div>` : ''}
     <div class="kpi"><div class="v">${num(a.month.heldPoints)}</div><div class="l">Points held from fraud, 30 days</div></div>
   </div>
   <div class="panel"><div class="row" style="align-items:center"><h3 style="margin:0;flex:1">Today's plan</h3>
@@ -615,7 +628,7 @@ views.ai = async () => {
     <div class="row"><div><label><input type="checkbox" id="aiOn" style="width:auto" ${s.aiEnabled ? 'checked' : ''}> AI Channel Manager on</label></div>
       <div><label>Owner / sales head WhatsApp numbers (comma separated)</label><input id="aiNums" value="${esc(s.aiBriefNumbers.join(', '))}" placeholder="919814000101"></div>
       <div><label>Morning plan at (hour, IST)</label><input type="number" id="aiHour" value="${s.aiBriefHour}"></div></div>
-    <div class="row">${[['aiDailyCap', 'Max actions a day'], ['aiMaxTouchesPerWeek', 'Max messages/calls per person a week'], ['aiOverdueDays', 'Payment reminder after (days late)'], ['aiOverdueMinRupees', '…if overdue at least (₹)'], ['aiWinbackMinRupees', 'Call quiet dealers who bought at least (₹, 6 months)'], ['aiSlabPushDays', 'Push slabs when scheme ends within (days)']].map(([k, l]) => `<div><label>${l}</label><input type="number" data-ai="${k}" value="${s[k]}"></div>`).join('')}</div>
+    <div class="row">${[['aiDailyCap', 'Max actions a day'], ['aiMaxTouchesPerWeek', 'Max messages/calls per person a week'], ...(a.bundle?.calls ? [['aiWinbackMinRupees', 'Call quiet dealers who bought at least (₹, 6 months)']] : []), ['aiSlabPushDays', 'Push slabs when scheme ends within (days)']].map(([k, l]) => `<div><label>${l}</label><input type="number" data-ai="${k}" value="${s[k]}"></div>`).join('')}</div>
     <label style="margin-top:14px">How much it does on its own</label>
     <div class="row">${a.types.map((t) => `<div><label>${esc(t.label)}</label>${lv(t)}</div>`).join('')}</div>
     <p class="muted">Start with "Ask me first". Fraud holds and scheme ideas always need a person.</p>
@@ -663,25 +676,25 @@ views.connectors = async () => {
 };
 
 // ---------- brands (super admin) ----------
-// Brands are created by the Regulars hub when a client's bundle includes
-// Loyvexa (Regulars → Admin → Products & Bundles), so there is no "new brand"
+// Brands are created by the hub when a client gets a bundle with Loyvexa
+// (Loopdesk admin → Businesses → Choose bundle B), so there is no "new brand"
 // form here. This page is for support: see every brand, open one, pause one.
 const safeColor = (c) => (/^#[0-9a-fA-F]{3,8}$/.test(c || '') ? c : '#E85D04');
 views.brands = async () => {
   const { tenants } = await api('/api/platform/tenants');
   $('main').innerHTML = `<h2>Brands</h2>
-  <div class="panel muted">New brands are created automatically when a client gets a bundle with Loyvexa in Regulars (Admin → Products &amp; Bundles), with the owner as the first admin.
-    The hub also pauses a brand when its bundle lapses and turns it back on after payment. A pause you set here on a hub brand lasts until the next hub update; to stop a client for good, end their bundle in Regulars.</div>
+  <div class="panel muted">New brands are created automatically when a client gets a bundle with Loyvexa in <b>Loopdesk admin → Businesses → Choose bundle B</b>, with the owner as the first admin.
+    The hub also pauses a brand when its bundle lapses and turns it back on after payment. A pause you set here on a hub brand lasts until the next hub update; to stop a client for good, end their bundle in Loopdesk admin.</div>
   <div class="panel"><table><tr><th>Brand</th><th>Slug</th><th>Set up by</th><th class="num">Participants</th><th class="num">Scans</th><th>Created</th><th>Status</th><th></th></tr>
   ${tenants.length ? tenants.map((t) => `<tr>
     <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:${safeColor(t.brand_color)}"></span><b>${esc(t.name)}</b></td>
     <td><code>${esc(t.slug)}</code></td>
-    <td>${t.hub_business_id ? '<span class="pill ok">Regulars hub</span>' : '<span class="pill">By hand</span>'}</td>
+    <td>${t.hub_business_id ? '<span class="pill ok">Loopdesk hub</span>' : '<span class="pill">By hand</span>'}</td>
     <td class="num">${num(t.participants)}</td><td class="num">${num(t.scans)}</td><td>${dt(t.created_at)}</td>
     <td><span class="pill ${t.status === 'ACTIVE' ? 'ok' : 'bad'}">${t.status === 'ACTIVE' ? 'Active' : 'Suspended'}</span></td>
     <td style="white-space:nowrap"><button class="sm" data-bopen="${t.id}">Open</button>
       ${t.status === 'ACTIVE' ? `<button class="sm danger" data-bstatus="${t.id}" data-to="SUSPENDED" data-name="${esc(t.name)}">Suspend</button>` : `<button class="sm" data-bstatus="${t.id}" data-to="ACTIVE" data-name="${esc(t.name)}">Activate</button>`}</td></tr>`).join('')
-    : '<tr><td colspan="8" class="muted">No brands yet. Give a client a bundle with Loyvexa in Regulars and it appears here.</td></tr>'}</table></div>`;
+    : '<tr><td colspan="8" class="muted">No brands yet. Give a client bundle B in Loopdesk admin and it appears here.</td></tr>'}</table></div>`;
   document.querySelectorAll('[data-bopen]').forEach((b) => b.onclick = () => {
     tenantId = b.dataset.bopen; store.set('wl_admin_tenant', tenantId);
     view = 'dashboard'; document.querySelectorAll('nav a').forEach((x) => x.classList.toggle('on', x.dataset.v === 'dashboard'));

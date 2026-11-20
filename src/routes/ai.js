@@ -10,7 +10,8 @@ import { requireAdmin, requireTenantScope, signAdmin } from '../middleware/auth.
 import { encrypt, newApiKey } from '../lib/crypto.js';
 import { sha256 } from '../lib/codes.js';
 import { getTenant, settingsOf } from '../services/tenants.js';
-import { ACTION_TYPES, LABEL, CHANNEL, aiSettings, ist } from '../services/ai/settings.js';
+import { ACTION_TYPES, LABEL, CHANNEL, actionTypesFor, aiSettings, ist } from '../services/ai/settings.js';
+import { bundleInfo } from '../services/bundle.js';
 import { planTenant, decide, composeBrief, sendBrief, stats, weeklyReportText } from '../services/ai/index.js';
 import { TEMPLATE_PARAMS } from '../services/ai/messaging.js';
 
@@ -42,9 +43,12 @@ r.get('/admin/ai', ...staff, ah(async (req, res) => {
     settings: {
       aiEnabled: s.aiEnabled, aiBriefNumbers: s.aiBriefNumbers, aiBriefHour: s.aiBriefHour, aiContactFromHour: s.aiContactFromHour, aiContactToHour: s.aiContactToHour,
       aiAutonomy: s.autonomy, aiDailyCap: s.aiDailyCap, aiMaxTouchesPerWeek: s.aiMaxTouchesPerWeek, aiReorderMinOrders: s.aiReorderMinOrders,
-      aiSlabPushDays: s.aiSlabPushDays, aiSlabPushWithinPct: s.aiSlabPushWithinPct, aiOverdueDays: s.aiOverdueDays, aiOverdueMinRupees: s.aiOverdueMinRupees, aiWinbackMinRupees: s.aiWinbackMinRupees,
+      aiSlabPushDays: s.aiSlabPushDays, aiSlabPushWithinPct: s.aiSlabPushWithinPct, aiWinbackMinRupees: s.aiWinbackMinRupees,
     },
-    types: ACTION_TYPES.map((t) => ({ type: t, label: LABEL[t].one, channel: CHANNEL[t] })),
+    // Loyalty actions only; win-back calls only with WayneRing (bundle rule).
+    types: actionTypesFor(tenant).map((t) => ({ type: t, label: LABEL[t].one, channel: CHANNEL[t] })),
+    allTypes: ACTION_TYPES.map((t) => ({ type: t, label: LABEL[t].one, channel: CHANNEL[t] })),
+    bundle: bundleInfo(tenant),
     plan, recent, week, month,
     korvo: { linked: !!tenant.korvo?.companyCode, companyCode: tenant.korvo?.companyCode || null, linkedAt: tenant.korvo?.linkedAt || null, ordersPaise30d: Number(korvo30.v), orderingDealers30d: korvo30.dealers, outstandingPaise: Number(owed.outstanding), overduePaise: Number(owed.overdue), dealersOverdue: owed.dealers_overdue, outstandingAsOf: owed.as_of },
     templates: TEMPLATE_PARAMS,

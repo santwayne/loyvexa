@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { ah, parse, notFound, conflict } from '../lib/errors.js';
+import { ah, parse, notFound, conflict, forbidden } from '../lib/errors.js';
 import { requireAdmin, requireTenantScope } from '../middleware/auth.js';
 import { getTenant } from '../services/tenants.js';
+import { hasWayneRing } from '../services/bundle.js';
 import { recomputeTenant, SEGMENTS } from '../services/segments.js';
 import * as calls from '../services/calls/index.js';
 import { createWaCampaign, launchWaCampaign, sendDue, waCampaignStats } from '../services/campaigns.js';
@@ -46,10 +47,15 @@ r.get('/call-campaigns', ah(async (req, res) => {
   const { rows } = await query(`SELECT * FROM call_campaigns WHERE tenant_id=$1 ORDER BY created_at DESC`, [req.tenantId]);
   res.json({ campaigns: await Promise.all(rows.map(async (c) => ({ ...c, stats: await calls.campaignStats(c.id) }))) });
 }));
-r.post('/call-campaigns', adminOnly, ah(async (req, res) => {
+// Bundle rule: calls go only through WayneRing, and only when it is in the client's package.
+const needsWayneRing = ah(async (req, res, next) => {
+  if (!hasWayneRing(await getTenant(req.tenantId))) throw forbidden('AI calls need WayneRing in your package. Ask Loopdesk to add it.');
+  next();
+});
+r.post('/call-campaigns', adminOnly, needsWayneRing, ah(async (req, res) => {
   res.status(201).json({ campaign: await calls.createCampaign({ tenantId: req.tenantId, adminId: req.admin.id, body: parse(callBody, req.body) }) });
 }));
-r.post('/call-campaigns/:id/launch', adminOnly, ah(async (req, res) => res.json(await calls.launchCampaign({ tenantId: req.tenantId, campaignId: req.params.id }))));
+r.post('/call-campaigns/:id/launch', adminOnly, needsWayneRing, ah(async (req, res) => res.json(await calls.launchCampaign({ tenantId: req.tenantId, campaignId: req.params.id }))));
 r.post('/call-campaigns/:id/cancel', adminOnly, ah(async (req, res) => {
   const { rows: [c] } = await query(`UPDATE call_campaigns SET status='CANCELLED' WHERE id=$1 AND tenant_id=$2 AND status IN ('DRAFT','RUNNING') RETURNING *`, [req.params.id, req.tenantId]);
   if (!c) throw conflict('INVALID_STATE', 'Campaign already finished');

@@ -11,6 +11,7 @@ import * as qr from '../services/qr.js';
 import * as ledger from '../services/ledger.js';
 import { processRedemption, rejectRedemption, isValidUpi } from '../services/redemption.js';
 import { emit } from '../services/events.js';
+import { bundleInfo } from '../services/bundle.js';
 
 const r = Router();
 r.use(requireAdmin('SUPER_ADMIN', 'TENANT_ADMIN', 'TENANT_STAFF'), requireTenantScope);
@@ -22,7 +23,7 @@ const page = (q) => ({ limit: Math.min(Number(q.limit) || 50, 500), offset: Math
 // ---------- Brand settings ----------
 r.get('/tenant', ah(async (req, res) => {
   const t = await getTenant(req.tenantId);
-  res.json({ tenant: { ...t, settings: settingsOf(t) } });
+  res.json({ tenant: { ...t, settings: settingsOf(t) }, bundle: bundleInfo(t) });
 }));
 
 r.patch('/tenant', adminOnly, ah(async (req, res) => {
@@ -242,8 +243,10 @@ r.get('/dashboard', ah(async (req, res) => {
   const [kpi, byType, daily, topEarners, byCity, topProducts, counterfeit] = await Promise.all([
     query(`SELECT
         (SELECT count(*) FROM participants WHERE tenant_id=$1) AS participants,
-        (SELECT count(*) FROM participants WHERE tenant_id=$1 AND last_scan_at > now() - interval '30 days') AS active_30d,
-        (SELECT count(*) FROM participants WHERE tenant_id=$1 AND last_scan_at IS NOT NULL AND last_scan_at <= now() - interval '30 days') AS dormant,
+        -- L1: activity = last scan OR last purchase (a dealer buys, he doesn't scan)
+        (SELECT count(*) FROM participants WHERE tenant_id=$1 AND GREATEST(last_scan_at, last_purchase_at) > now() - interval '30 days') AS active_30d,
+        -- L2: same "Dormant" as the Segments page (segDormantDays, default 45)
+        (SELECT count(*) FROM participants WHERE tenant_id=$1 AND status='ACTIVE' AND segment='DORMANT') AS dormant,
         (SELECT count(*) FROM qr_codes WHERE tenant_id=$1) AS codes_generated,
         (SELECT count(*) FROM qr_codes WHERE tenant_id=$1 AND status='SCANNED') AS codes_scanned,
         (SELECT count(*) FROM qr_codes WHERE tenant_id=$1 AND scanned_at > date_trunc('day', now())) AS scans_today,
@@ -275,8 +278,10 @@ r.get('/dashboard', ah(async (req, res) => {
              FROM verify_checks WHERE tenant_id=$1 AND created_at > now() - make_interval(days => $2)`, [t, days]),
   ]);
   const k = kpi.rows[0];
+  const tenant = await getTenant(t);
   res.json({
-    kpis: Object.fromEntries(Object.entries(k).map(([a, v]) => [a, Number(v)])),
+    kpis: { ...Object.fromEntries(Object.entries(k).map(([a, v]) => [a, Number(v)])), dormant_days: settingsOf(tenant).segDormantDays },
+    bundle: bundleInfo(tenant),
     participantsByType: byType.rows, daily: daily.rows, topEarners: topEarners.rows,
     scansByCity: byCity.rows, topProducts: topProducts.rows, authenticity: counterfeit.rows[0],
   });

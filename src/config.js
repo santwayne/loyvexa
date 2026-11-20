@@ -35,6 +35,13 @@ export const config = {
     issuer: 'regulars-hub',
     audience: 'loyvexa',
   },
+  // Bundle rule 4: a hub brand's WhatsApp goes out through Regulars (one
+  // client = one number). Base URL of the Regulars app, e.g.
+  // https://regulars.wayneesolutions.com. Signed with HUB_SECRET. Empty = the
+  // brand's own number on the WhatsApp page is used, as before.
+  regulars: {
+    apiUrl: (process.env.REGULARS_API_URL || '').replace(/\/$/, ''),
+  },
   korvo: {
     baseUrl: process.env.KORVO_BASE_URL || '',
     apiKey: process.env.KORVO_API_KEY || '',

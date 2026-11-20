@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import jwt from 'jsonwebtoken';
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { decrypt, safeEqual } from '../lib/crypto.js';
+import { waViaRegulars } from './bundle.js';
 
 /**
  * WhatsApp Cloud API sender. One number per brand (tenant_channels).
@@ -10,11 +12,35 @@ import { decrypt, safeEqual } from '../lib/crypto.js';
  *
  * Meta rule: free-form text only within 24h of the user's last message.
  * Anything business-initiated (payout done, scheme bonus, OTP) must use an approved template.
+ *
+ * Bundle rule 4: a brand made by the Regulars hub sends through Regulars (the
+ * client's one WhatsApp number, set up in Regulars Settings) — see regularsSend.
  */
 export async function channelForTenant(tenantId) {
   const { rows: [c] } = await query(`SELECT * FROM tenant_channels WHERE tenant_id=$1 AND channel='WHATSAPP' AND status='ACTIVE'`, [tenantId]);
   return c || null;
 }
+/** Regulars owns the templates for hub brands: Loyvexa asks for them by a fixed name per event. */
+export const regularsTemplateName = (key) => `loyvexa_${String(key).toLowerCase().replace(/[^a-z0-9]+/g, '_')}`;
+
+/**
+ * Who sends this brand's WhatsApp, and which approved template to use for an
+ * event ('otp', 'ai.slab', 'redemption.paid'…). Bundle brands: Regulars, with
+ * its templates (name = regularsTemplateName(key), language hi unless the
+ * brand's own channel config says otherwise). Others: the brand's own number.
+ */
+export async function senderFor(tenantId) {
+  const { rows: [tenant] } = await query(`SELECT id, hub_business_id FROM tenants WHERE id=$1`, [tenantId]);
+  const channel = await channelForTenant(tenantId);
+  const viaRegulars = waViaRegulars(tenant);
+  const template = (key) => {
+    const own = key === 'otp' ? channel?.config?.otpTemplate : channel?.config?.templates?.[key];
+    if (own) return typeof own === 'string' ? { name: own } : own;
+    return viaRegulars ? { name: regularsTemplateName(key), language: 'en' } : null;
+  };
+  return { viaRegulars, ready: viaRegulars || !!channel, template };
+}
+
 export async function channelByPhoneNumberId(id) {
   const { rows: [c] } = await query(`SELECT c.*, row_to_json(t.*) AS tenant FROM tenant_channels c JOIN tenants t ON t.id=c.tenant_id WHERE c.phone_number_id=$1 AND c.status='ACTIVE'`, [id]);
   return c || null;
@@ -38,7 +64,41 @@ async function record({ tenantId, participantId, to, body, payload, status, erro
   return m;
 }
 
+/**
+ * Send through Regulars: POST {REGULARS_API_URL}/api/hub/tools/loyvexa/whatsapp/send
+ * Bearer HS256 JWT (HUB_SECRET): iss "loyvexa", aud "regulars-hub", sub <hub business id>,
+ * purpose "whatsapp-send", jti, 2 minutes. Body { to, message } where message is the
+ * same WhatsApp Cloud API payload ({ type: 'text' | 'template', … }).
+ * Regulars uses its own number + templates and its own STOP list, and answers
+ * { messageId } (or an error, e.g. the person sent STOP).
+ */
+async function regularsSend(tenant, to, payload) {
+  const token = jwt.sign({ purpose: 'whatsapp-send', jti: crypto.randomUUID() }, config.hub.secret,
+    { algorithm: 'HS256', issuer: 'loyvexa', audience: config.hub.issuer, subject: tenant.hub_business_id, expiresIn: '2m' });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(`${config.regulars.apiUrl}/api/hub/tools/loyvexa/whatsapp/send`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, message: payload }), signal: ctrl.signal,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json?.error?.message || json?.error || `Regulars WhatsApp ${res.status}`);
+    return json?.messageId || null;
+  } finally { clearTimeout(timer); }
+}
+
 async function send({ tenantId, participantId, to, body, payload }) {
+  const { rows: [tenant] } = await query(`SELECT id, hub_business_id FROM tenants WHERE id=$1`, [tenantId]);
+  if (waViaRegulars(tenant)) {
+    if (config.whatsapp.sendMode !== 'live') return record({ tenantId, participantId, to, body, payload, status: 'MOCK' });
+    try {
+      const id = await regularsSend(tenant, to, payload);
+      return record({ tenantId, participantId, to, body, payload, status: 'SENT', providerMsgId: id });
+    } catch (e) {
+      return record({ tenantId, participantId, to, body, payload, status: 'FAILED', error: e.message });
+    }
+  }
   const channel = await channelForTenant(tenantId);
   if (config.whatsapp.sendMode !== 'live' || !channel?.access_token_enc) {
     return record({ tenantId, participantId, to, body, payload, status: 'MOCK' });

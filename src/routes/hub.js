@@ -7,6 +7,8 @@ import { config } from '../config.js';
 import { query, tx } from '../db/pool.js';
 import { AppError, ah, forbidden, parse, unauthorized } from '../lib/errors.js';
 import { signAdmin } from '../middleware/auth.js';
+import { handleInbound } from '../services/bot.js';
+import { applyStatus } from '../services/campaigns.js';
 
 /**
  * Regulars hub auto-connect (Nov 2026).
@@ -18,6 +20,12 @@ import { signAdmin } from '../middleware/auth.js';
  *                                  or updates it; active=false pauses it
  *   POST /api/hub/sso/exchange     swaps a one-time hub token (from /sso#token=…)
  *                                  for a normal brand-console session
+ *   POST /api/hub/whatsapp/inbound Regulars forwards WhatsApp messages that came to
+ *                                  the client's number and belong to Loyvexa (bot:
+ *                                  points, schemes, order) plus delivery statuses
+ *
+ * Provision may carry `tools` (the package's tools, e.g. ["WAYNERING","LOYVEXA"]).
+ * Loyvexa keeps it in settings.hub.tools: AI calls only show with WAYNERING.
  *
  * Both are authenticated by an HS256 JWT signed with HUB_SECRET:
  *   iss "regulars-hub"  aud "loyvexa"  sub <Regulars business id>
@@ -73,6 +81,7 @@ const provisionSchema = z.object({
   active: z.boolean(),
   paidUntil: z.string().nullable().optional(),
   plan: z.string().nullable().optional(),
+  tools: z.array(z.string()).optional(),
   business: z.object({
     name: z.string().min(1),
     sector: z.string().optional().nullable(),
@@ -90,6 +99,7 @@ r.post('/provision', ah(async (req, res) => {
 
   const status = b.active ? 'ACTIVE' : 'SUSPENDED';
   const hubInfo = { businessId: b.hubBusinessId, country: b.business.country ?? null, timezone: b.business.timezone ?? null, paidUntil: b.paidUntil ?? null };
+  if (b.tools) hubInfo.tools = b.tools.map((t) => t.toUpperCase());
 
   const out = await tx(async (db) => {
     const { rows: [found] } = await db.query(`SELECT * FROM tenants WHERE hub_business_id=$1 FOR UPDATE`, [b.hubBusinessId]);
@@ -141,6 +151,32 @@ r.post('/sso/exchange', ah(async (req, res) => {
   await query(`UPDATE admin_users SET last_login_at=now() WHERE id=$1`, [u.id]);
   const next = typeof claims.next === 'string' && claims.next.startsWith('/') && !claims.next.startsWith('//') ? claims.next : '/admin/';
   res.json({ token: signAdmin(u), user: { id: u.id, name: u.name, email: u.email, role: u.role, tenantId: u.tenant_id }, next });
+}));
+
+/**
+ * Bundle rule 4: the client's WhatsApp number lives in Regulars. Messages for
+ * Loyvexa (a dealer typing "points", "order", "2"…) and statuses of messages
+ * Loyvexa sent are forwarded here. Loyvexa's replies go back out through
+ * Regulars (services/whatsapp.js). Hub token purpose "whatsapp-inbound".
+ */
+const inboundSchema = z.object({
+  messages: z.array(z.object({ from: z.string().min(6), text: z.string().nullable().optional(), id: z.string().optional() })).max(100).default([]),
+  statuses: z.array(z.object({ id: z.string(), status: z.string(), error: z.string().nullable().optional() })).max(500).default([]),
+});
+r.post('/whatsapp/inbound', ah(async (req, res) => {
+  const claims = await verifyHubToken(bearer(req), 'whatsapp-inbound');
+  const b = parse(inboundSchema, req.body);
+  const { rows: [t] } = await query(`SELECT * FROM tenants WHERE hub_business_id=$1`, [claims.sub]);
+  if (!t) throw unauthorized('Brand not found for this business');
+  if (t.status !== 'ACTIVE') throw forbidden('This brand is paused');
+  const channel = { tenant_id: t.id, tenant: t, viaRegulars: true };
+  for (const st of b.statuses) await applyStatus({ providerMsgId: st.id, status: st.status, error: st.error || undefined }).catch(() => {});
+  let handled = 0;
+  for (const m of b.messages) {
+    await handleInbound({ channel, from: m.from.replace(/\D/g, ''), text: m.text?.trim() || 'menu', providerMsgId: m.id || null });
+    handled++;
+  }
+  res.json({ ok: true, handled });
 }));
 
 export default r;
