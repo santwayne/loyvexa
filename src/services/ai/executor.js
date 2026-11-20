@@ -5,14 +5,15 @@ import { buildScript } from '../calls/scripts.js';
 import * as ledger from '../ledger.js';
 import { emit } from '../events.js';
 import { sendBusiness } from './messaging.js';
-import { CHANNEL, aiSettings, ist, withinContactHours } from './settings.js';
+import { CHANNEL, MOVED_OUT, aiSettings, ist, withinContactHours } from './settings.js';
+import { hasWayneRing } from '../bundle.js';
 
 /**
  * Carries out approved actions. WhatsApp and calls only inside the brand's
  * contact hours (an approved action waits until then). Each action is
  * claimed first, so two workers never run the same one.
  */
-const EVENT = { REORDER_NUDGE: 'ai.reorder', SLAB_PUSH: 'ai.slab', MECHANIC_NUDGE: 'ai.mechanic', PAYMENT_REMINDER: 'ai.payment' };
+const EVENT = { SLAB_PUSH: 'ai.slab', MECHANIC_NUDGE: 'ai.mechanic' };
 
 async function finish(id, status, fields = {}) {
   const { rows: [a] } = await query(
@@ -42,6 +43,9 @@ export async function executeAction(actionId, { now = new Date() } = {}) {
   const { rows: [tenant] } = await query(`SELECT * FROM tenants WHERE id=$1`, [a.tenant_id]);
   const s = aiSettings(tenant);
   const channel = CHANNEL[a.type];
+  // Bundle rule: these are no longer Loyvexa's job (an old approved one never goes out).
+  if (MOVED_OUT[a.type]) return { action: await finish(a.id, 'SKIPPED', { error: MOVED_OUT[a.type] }) };
+  if (a.type === 'WINBACK_CALL' && !hasWayneRing(tenant)) return { action: await finish(a.id, 'SKIPPED', { error: 'AI calls need WayneRing in the package' }) };
   if (channel !== 'INTERNAL' && !withinContactHours(s, now)) {
     await query(`UPDATE ai_actions SET status='APPROVED', updated_at=now() WHERE id=$1`, [a.id]);
     return { deferred: true };
@@ -51,7 +55,7 @@ export async function executeAction(actionId, { now = new Date() } = {}) {
 
   try {
     if (channel === 'WHATSAPP') {
-      if (['REORDER_NUDGE', 'SLAB_PUSH', 'MECHANIC_NUDGE'].includes(a.type) && p.wa_opt_out) return { action: await finish(a.id, 'SKIPPED', { error: 'Opted out of offers (sent STOP)' }) };
+      if (['SLAB_PUSH', 'MECHANIC_NUDGE'].includes(a.type) && p.wa_opt_out) return { action: await finish(a.id, 'SKIPPED', { error: 'Opted out of offers (sent STOP)' }) };
       const r = await sendBusiness({ tenantId: tenant.id, participantId: p.id, to: p.mobile, eventType: EVENT[a.type], text: a.payload.message, params: a.payload.params || [] });
       if (r.status === 'no-template') return { action: await finish(a.id, 'FAILED', { error: `Needs an approved WhatsApp template for "${EVENT[a.type]}" (the dealer hasn't messaged in 24 hours)` }) };
       if (r.status === 'failed') return { action: await finish(a.id, 'FAILED', { error: r.error || 'WhatsApp send failed' }) };

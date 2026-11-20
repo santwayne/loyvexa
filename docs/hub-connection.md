@@ -27,4 +27,21 @@ Token: HS256, `iss regulars-hub`, `aud loyvexa`, `sub` = Regulars business id, e
 4. Test: `BASE=… HUB_SECRET=… node scripts/e2e-hub.js`.
 
 ## Brands page (super admin)
-Console me super admin ko **Brands** dikhta hai: saare brands, kaun hub se bana, participants/scans, Open, Suspend/Activate. Naya brand banane ka form jaan-boojh ke nahi hai, kyunki brand Regulars se hi banne chahiye. Hub brand ko yahan suspend karoge toh agle hub update tak hi suspend rahega. Client ko pakka band karna ho toh Regulars me bundle khatam karo.
+Console me super admin ko **Brands** dikhta hai: saare brands, kaun hub se bana, participants/scans, Open, Suspend/Activate. Naya brand banane ka form jaan-boojh ke nahi hai: brand **Loopdesk admin → Businesses → Choose bundle B** se banta hai. Hub brand ko yahan suspend karoge toh agle hub update tak hi suspend rahega. Client ko pakka band karna ho toh Loopdesk admin me bundle khatam karo.
+
+## Bundle rules (guide 06, Nov 2026)
+Har tool sirf apna kaam karta hai. Hub se bane brand (`hub_business_id` wala) pe ye lagta hai; haath se bane purane/demo brand pehle jaise chalte hain.
+
+| Rule | Loyvexa me kya hota hai |
+| --- | --- |
+| Calling sirf WayneRing se, aur sirf jab package me ho | Provision me `tools` aata hai (jaise `["LOYVEXA","WAYNERING"]`) → `settings.hub.tools`. WAYNERING nahi → AI calls page chhupta hai, call API 403, AI Manager win-back call nahi banata, queued calls SKIPPED. `tools` aaya hi nahi → calls band (hub brand). |
+| WhatsApp / SMS sirf Regulars ke number se | `REGULARS_API_URL` set ho toh bot ke jawab, OTP, campaigns, AI messages sab Regulars se jaate hain (neeche contract). WhatsApp page pe number ka form nahi dikhta, "Regulars → Settings" likha aata hai. |
+| Reorder nudge → Regulars, payment reminder → Korvo + Regulars | AI Manager ab ye dono nahi banata. Purane waiting wale `006_bundle_rules.sql` band kar deta hai. |
+| Korvo tiles sirf Korvo link pe | Dashboard strip pe Korvo orders / overdue / recovered sirf jab Korvo linked ho. |
+
+### Regulars side pe kya banana hai (alag PR, regularsplatform)
+1. **Provision me `tools` bhejo**: `lib/hub/provision.ts` ki body me `tools: businessTools(biz)` (plus Korvo/WayneRing jo bhi package me ho).
+2. **Send endpoint**: `POST /api/hub/tools/loyvexa/whatsapp/send`. Header `Authorization: Bearer <JWT>`: HS256, secret = `HUB_SECRET_LOYVEXA`, `iss "loyvexa"`, `aud "regulars-hub"`, `sub` = business id, `purpose "whatsapp-send"`, `jti`, 2 min. Body `{ to, message }` jahan `message` WhatsApp Cloud API ka payload hai (`type: "text"` ya `type: "template"`). Template naam Loyvexa `loyvexa_<event>` bhejta hai (jaise `loyvexa_otp`, `loyvexa_ai_slab`, `loyvexa_redemption_paid`) — ye templates Regulars ke Meta account me approve karne hain. STOP list Regulars ki. Jawab `{ messageId }`.
+3. **Inbound forward**: client ke number pe aaya message jo Loyvexa ka ho (dealer/mechanic: points, scheme, order, cash-out) → `POST {LOYVEXA_API_URL}/api/hub/whatsapp/inbound`, hub token `purpose "whatsapp-inbound"`, body `{ messages: [{ from, text, id }], statuses: [{ id, status, error }] }`.
+
+Loyvexa `.env`: `REGULARS_API_URL=https://regulars.wayneesolutions.com` (khaali = purana tareeka, brand ka apna number).

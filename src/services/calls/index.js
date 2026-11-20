@@ -8,6 +8,7 @@ import * as ledger from '../ledger.js';
 import { emit } from '../events.js';
 import { buildScript } from './scripts.js';
 import { getCallProvider } from './providers.js';
+import { hasWayneRing } from '../bundle.js';
 
 export const OUTCOMES = ['INTERESTED', 'NOT_INTERESTED', 'NO_ANSWER', 'WRONG_NUMBER', 'CALL_LATER', 'DO_NOT_CALL'];
 
@@ -65,12 +66,16 @@ export async function dispatchDue({ limit = 20, now = new Date() } = {}) {
   try {
     await client.query('BEGIN');
     const { rows } = await client.query(`
-      SELECT k.*, p.mobile, c.language, c.provider, t.settings AS tenant_settings
+      SELECT k.*, p.mobile, c.language, c.provider, t.settings AS tenant_settings, t.hub_business_id
         FROM calls k JOIN call_campaigns c ON c.id=k.campaign_id JOIN participants p ON p.id=k.participant_id JOIN tenants t ON t.id=k.tenant_id
        WHERE k.status='QUEUED' AND c.status='RUNNING' ORDER BY k.created_at LIMIT $1 FOR UPDATE OF k SKIP LOCKED`, [limit]);
     const results = [];
     for (const k of rows) {
       const s = settingsOf({ settings: k.tenant_settings });
+      if (!hasWayneRing({ hub_business_id: k.hub_business_id, settings: k.tenant_settings })) { // bundle rule: WayneRing only
+        await client.query(`UPDATE calls SET status='SKIPPED', summary='WayneRing is not in the package', completed_at=now() WHERE id=$1`, [k.id]);
+        continue;
+      }
       const h = istHour(now);
       if (h < s.callHoursStart || h >= s.callHoursEnd) continue; // outside calling hours: stays queued
       try {

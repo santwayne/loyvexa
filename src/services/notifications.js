@@ -1,6 +1,6 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
-import { channelForTenant, sendText, sendTemplate } from './whatsapp.js';
+import { senderFor, sendText, sendTemplate } from './whatsapp.js';
 import { appLink } from './bot.js';
 import { getTenant } from './tenants.js';
 
@@ -39,8 +39,8 @@ const BUILDERS = {
 export async function deliverEvent(evt) {
   const build = BUILDERS[evt.type];
   if (!build || !evt.payload?.participantId) return 'skipped';
-  const channel = await channelForTenant(evt.tenant_id);
-  if (!channel && config.whatsapp.sendMode === 'live') return 'no-channel';
+  const sender = await senderFor(evt.tenant_id);
+  if (!sender.ready && config.whatsapp.sendMode === 'live') return 'no-channel';
   const { rows: [p] } = await query(`SELECT * FROM participants WHERE id=$1`, [evt.payload.participantId]);
   if (!p || p.status !== 'ACTIVE') return 'skipped';
   const tenant = await getTenant(evt.tenant_id);
@@ -49,7 +49,7 @@ export async function deliverEvent(evt) {
 
   const { rows: [recent] } = await query(
     `SELECT 1 FROM messages WHERE participant_id=$1 AND direction='IN' AND created_at > now() - interval '23 hours' LIMIT 1`, [p.id]);
-  const tpl = channel?.config?.templates?.[evt.type];
+  const tpl = sender.template(evt.type);
   if (recent || config.whatsapp.sendMode !== 'live') {
     await sendText({ tenantId: evt.tenant_id, participantId: p.id, to: p.mobile, text: msg.text });
     return 'sent-text';

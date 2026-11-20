@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { ah, parse, notFound, badRequest, conflict } from '../lib/errors.js';
+import { ah, parse, notFound, badRequest, conflict, forbidden } from '../lib/errors.js';
 import { requireAdmin, requireTenantScope } from '../middleware/auth.js';
 import { sha256 } from '../lib/codes.js';
 import { newApiKey, encrypt } from '../lib/crypto.js';
@@ -11,6 +11,7 @@ import { ingestDocuments, assignInvoice } from '../services/invoices.js';
 import * as schemes from '../services/schemes.js';
 import { handleInbound } from '../services/bot.js';
 import { getTenant } from '../services/tenants.js';
+import { bundleInfo } from '../services/bundle.js';
 
 const r = Router();
 r.use(requireAdmin('SUPER_ADMIN', 'TENANT_ADMIN', 'TENANT_STAFF'), requireTenantScope);
@@ -157,9 +158,11 @@ r.post('/schemes/:id/settle', adminOnly, ah(async (req, res) => res.json(await s
 // ================= WhatsApp =================
 r.get('/channels/whatsapp', ah(async (req, res) => {
   const { rows: [c] } = await query(`SELECT id, phone_number_id, display_number, config, status, created_at, access_token_enc IS NOT NULL AS has_token FROM tenant_channels WHERE tenant_id=$1 AND channel='WHATSAPP'`, [req.tenantId]);
-  res.json({ channel: c || null, webhookUrl: `${config.publicBaseUrl}/api/whatsapp/webhook`, sendMode: config.whatsapp.sendMode });
+  res.json({ channel: c || null, webhookUrl: `${config.publicBaseUrl}/api/whatsapp/webhook`, sendMode: config.whatsapp.sendMode, bundle: bundleInfo(await getTenant(req.tenantId)) });
 }));
 r.put('/channels/whatsapp', adminOnly, ah(async (req, res) => {
+  // Bundle rule 4: a bundle client's one WhatsApp number is set up in Regulars Settings.
+  if (!bundleInfo(await getTenant(req.tenantId)).whatsappSetupHere) throw forbidden('WhatsApp for this business is set up in Regulars → Settings (one number for all tools).');
   const b = parse(z.object({
     phoneNumberId: z.string().min(5), displayNumber: z.string().optional(), accessToken: z.string().min(20).optional(),
     otpTemplate: z.object({ name: z.string(), language: z.string().optional() }).optional(),

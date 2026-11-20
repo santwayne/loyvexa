@@ -120,39 +120,38 @@ ok('outstanding feed from Korvo matched to dealers by Korvo id');
 // ── Plan ──
 const planned = await planTenant(tenant, now);
 const byType = Object.fromEntries(planned.map((a) => [a.type, a]));
-for (const t of ['REORDER_NUDGE', 'WINBACK_CALL', 'SLAB_PUSH', 'MECHANIC_NUDGE', 'PAYMENT_REMINDER', 'FRAUD_REVIEW']) assert.ok(byType[t], `missing ${t}: ${planned.map((a) => a.type)}`);
-assert.equal(byType.REORDER_NUDGE.participant_id, D1.id);
-assert.match(byType.REORDER_NUDGE.reason, /every 10 days; last order 11 days ago/);
-const bk = Object.fromEntries(byType.REORDER_NUDGE.payload.basket.map((b) => [b.sku, b.qty]));
-assert.equal(bk['BRK-110'], 20); assert.equal(bk['CLT-220'], 5);
+// D1 is near a slab too now that reorder nudges are gone; the test follows D4.
+byType.SLAB_PUSH = planned.find((a) => a.type === 'SLAB_PUSH' && a.participant_id === D4.id) || byType.SLAB_PUSH;
+for (const t of ['WINBACK_CALL', 'SLAB_PUSH', 'MECHANIC_NUDGE', 'FRAUD_REVIEW']) assert.ok(byType[t], `missing ${t}: ${planned.map((a) => a.type)}`);
+// Bundle rule: reorder nudges (Regulars) and payment reminders (Korvo → Regulars) are not Loyvexa's job.
+assert.ok(!byType.REORDER_NUDGE && !byType.PAYMENT_REMINDER, `moved-out actions planned: ${planned.map((a) => a.type)}`);
 assert.equal(byType.WINBACK_CALL.participant_id, D2.id);
 assert.equal(byType.SLAB_PUSH.participant_id, D4.id); assert.match(byType.SLAB_PUSH.payload.message, /₹10,000/);
-assert.equal(byType.PAYMENT_REMINDER.participant_id, D3.id); assert.equal(Number(byType.PAYMENT_REMINDER.expected_paise), 1800000);
 assert.equal(byType.FRAUD_REVIEW.participant_id, M2.id);
 assert.equal(byType.MECHANIC_NUDGE.status, 'APPROVED', 'AUTO actions are pre-approved');
 assert.equal(byType.FRAUD_REVIEW.autonomy, 'APPROVE');
-ok('plan: reorder due, quiet dealer call, near-slab push, payment reminder, fraud hold, mechanic nudge');
+ok('plan (loyalty only): quiet dealer call, near-slab push, fraud hold, mechanic nudge; no reorder / payment reminder');
 assert.equal((await planTenant(tenant, now)).length, 0);
 ok('planning again proposes nothing twice');
 
 // ── Morning brief + owner approves on WhatsApp ──
 const brief = await composeBrief(tenant, now);
 assert.match(brief.text, /AI Channel Manager/); assert.match(brief.text, /Reply: \*1 3\*/);
-assert.ok(brief.items.length >= 5);
+assert.ok(brief.items.length >= 3);
 ok('morning plan text is numbered with ₹ values');
 const channel = { tenant };
-const reorderItem = brief.items.find((a) => a.type === 'REORDER_NUDGE').brief_item;
+const slabItem = brief.items.find((a) => a.type === 'SLAB_PUSH').brief_item;
 const fraudItem = brief.items.find((a) => a.type === 'FRAUD_REVIEW').brief_item;
-const r1 = await handleInbound({ channel, from: mob(99), text: `${reorderItem} ${fraudItem}` });
+const r1 = await handleInbound({ channel, from: mob(99), text: `${slabItem} ${fraudItem}` });
 assert.match(r1, /ho gaya/);
-let [a1] = await q(`SELECT * FROM ai_actions WHERE id=$1`, [byType.REORDER_NUDGE.id]);
+let [a1] = await q(`SELECT * FROM ai_actions WHERE id=$1`, [byType.SLAB_PUSH.id]);
 assert.equal(a1.status, 'DONE'); assert.equal(a1.decided_by, `whatsapp:${mob(99)}`);
-const [msg1] = await q(`SELECT * FROM messages WHERE participant_id=$1 AND direction='OUT' ORDER BY id DESC LIMIT 1`, [D1.id]);
-assert.match(msg1.body, /REORDER/);
+const [msg1] = await q(`SELECT * FROM messages WHERE participant_id=$1 AND direction='OUT' ORDER BY id DESC LIMIT 1`, [D4.id]);
+assert.match(msg1.body, /slab/);
 assert.equal((await q(`SELECT status FROM participants WHERE id=$1`, [M2.id]))[0].status, 'BLOCKED');
-ok('owner replies "1 4" on WhatsApp → reminder sent to the dealer, fraudster blocked');
+ok('owner replies "1 4" on WhatsApp → slab push sent to the dealer, fraudster blocked');
 const r2 = await handleInbound({ channel, from: mob(99), text: 'ALL' });
-assert.ok(r2.split('\n').length >= 3);
+assert.ok(r2.split('\n').length >= 2, r2);
 const [call] = await q(`SELECT k.*, c.script, c.source FROM calls k JOIN call_campaigns c ON c.id=k.campaign_id WHERE k.participant_id=$1`, [D2.id]);
 assert.equal(call.script, 'DEALER_WINBACK'); assert.equal(call.source, 'ai'); assert.match(call.context.firstMessage, /order nahi aaya/);
 ok('"ALL" → the AI call is queued with the dealer win-back script');
@@ -163,15 +162,6 @@ ok('AUTO action (mechanic nudge) ran without asking');
 assert.equal((await handleInbound({ channel, from: mob(98), text: '1 2' })).includes('Rewards'), true);
 ok('a stranger sending "1 2" gets the normal bot, not the AI');
 
-// ── Dealer taps REORDER → cart from the suggested basket → order ──
-const c1 = await handleInbound({ channel, from: D1.mobile, text: 'REORDER' });
-assert.match(c1, /Brake Pad Set × 20/); assert.match(c1, /Clutch Plate × 5/);
-const c2 = await handleInbound({ channel, from: D1.mobile, text: 'confirm' });
-assert.match(c2, /Order \*WA-/);
-const [ord] = await q(`SELECT * FROM orders WHERE participant_id=$1 AND status='PLACED'`, [D1.id]);
-assert.equal(ord.ai_action_id, byType.REORDER_NUDGE.id); assert.equal(Number(ord.total_paise), 20 * 45000 + 5 * 120000);
-ok('dealer replies REORDER → cart pre-filled with last order → confirm places it');
-
 // ── Outcomes ──
 await invoice(D2, 0, 30000); // quiet dealer buys again after the call
 await must(api('POST', '/api/connect/outstanding', { key, body: { asOf: new Date(now.getTime() + 60000).toISOString(), complete: true, items: [{ ref: 'L-003', outstanding: 12000, overdue: 0, daysOverdue: 0 }] } }));
@@ -179,17 +169,16 @@ await q(`UPDATE ai_actions SET executed_at=now() - interval '1 minute' WHERE ten
 await q(`UPDATE invoices SET created_at=now() WHERE participant_id=$1 AND invoice_date=$2`, [D2.id, dateAgo(0)]);
 await sweepOutcomes(new Date());
 const won = Object.fromEntries((await q(`SELECT type, outcome, outcome_paise FROM ai_actions WHERE tenant_id=$1 AND outcome='WON'`, [tenant.id])).map((r) => [r.type, Number(r.outcome_paise)]));
-assert.equal(won.REORDER_NUDGE, 1500000, 'WhatsApp order value');
 assert.equal(won.WINBACK_CALL, 3000000, 'new invoice after the call');
-assert.equal(won.PAYMENT_REMINDER, 1800000, 'overdue cleared');
-ok('outcomes: reorder → ₹15,000 order, call → ₹30,000 invoice, reminder → ₹18,000 collected');
+ok('outcomes: call → ₹30,000 invoice');
 const rep = await weeklyReportText(tenant);
-assert.match(rep.text, /₹63,000/); assert.match(rep.text, /payment recovery/);
-ok('weekly report counts ₹63,000 influenced');
+assert.match(rep.text, /₹30,000/);
+ok('weekly report counts ₹30,000 influenced');
 
 // ── Console API ──
 const ov = await must(api('GET', '/api/admin/ai', { token: T }));
-assert.equal(ov.week.won, 3); assert.equal(ov.korvo.overduePaise, 0);
+assert.equal(ov.week.won, 1); assert.equal(ov.korvo.overduePaise, 0);
+assert.ok(!ov.types.some((t) => ['REORDER_NUDGE', 'PAYMENT_REMINDER'].includes(t.type)));
 assert.equal((await api('PATCH', '/api/admin/ai/settings', { token: T, body: { aiAutonomy: { FRAUD_REVIEW: 'AUTO' } } })).status, 400);
 ok('console overview; fraud holds can never be set to run on their own');
 
@@ -204,6 +193,11 @@ assert.equal(decrypt(t2.korvo.apiKeyEnc), korvo.key); assert.equal(t2.settings.o
 assert.equal((await api('GET', '/api/connect/ping', { key: prov.connectorKey })).status, 200);
 assert.equal((await api('GET', '/api/connect/ping', { key })).status, 401, 'old key replaced');
 ok('Connect Korvo: both sides keyed in one call; old connector key retired');
+// A dealer's own WhatsApp order (typed "order", picks items, confirms)
+assert.match(await handleInbound({ channel, from: D1.mobile, text: 'order' }), /Brake Pad Set/);
+await handleInbound({ channel, from: D1.mobile, text: '1 20' });
+assert.match(await handleInbound({ channel, from: D1.mobile, text: 'confirm' }), /Order \*WA-/);
+const [ord] = await q(`SELECT * FROM orders WHERE participant_id=$1 AND status='PLACED'`, [D1.id]);
 await q(`UPDATE orders SET dms='korvo' WHERE id=$1`, [ord.id]);
 await pushPlaced();
 assert.equal(korvo.orders.at(-1).externalOrderId, ord.order_no); assert.equal(korvo.orders.at(-1).items[0].quantity > 0, true);
@@ -222,6 +216,26 @@ ok('Korvo admin opens the console in one click; links are single-use; never a su
 
 const bad = await q(`SELECT w.participant_id FROM wallets w LEFT JOIN (SELECT participant_id, sum(points) s FROM ledger_entries GROUP BY 1) l ON l.participant_id=w.participant_id WHERE w.balance <> coalesce(l.s,0)`);
 assert.equal(bad.length, 0); ok('ledger integrity');
+
+// ── Bundle rules for a hub brand (guide 06) ──
+await q(`UPDATE tenants SET hub_business_id=$2, settings = settings || jsonb_build_object('hub', jsonb_build_object('tools', '["LOYVEXA"]'::jsonb)) WHERE id=$1`, [tenant.id, `hub-e2e-${slug}`]);
+const tb = await must(api('GET', '/api/admin/tenant', { token: T }));
+assert.equal(tb.bundle.calls, false); assert.equal(tb.bundle.whatsappSetupHere, false);
+assert.equal((await api('POST', '/api/admin/call-campaigns', { token: T, body: { name: 'x', script: 'WINBACK' } })).status, 403);
+assert.equal((await api('PUT', '/api/admin/channels/whatsapp', { token: T, body: { phoneNumberId: '123456' } })).status, 403);
+const ov2 = await must(api('GET', '/api/admin/ai', { token: T }));
+assert.ok(!ov2.types.some((t) => t.type === 'WINBACK_CALL'));
+ok('hub brand without WayneRing: no AI calls (page, API, AI Manager); WhatsApp set up in Regulars');
+await q(`UPDATE tenants SET settings = jsonb_set(settings, '{hub,tools}', '["LOYVEXA","WAYNERING"]'::jsonb) WHERE id=$1`, [tenant.id]);
+assert.equal((await must(api('GET', '/api/admin/tenant', { token: T }))).bundle.calls, true);
+ok('WayneRing in the package → AI calls come back');
+const dash = await must(api('GET', '/api/admin/dashboard', { token: T }));
+assert.equal(dash.kpis.dormant_days, 45);
+const [{ n: dormantSeg }] = await q(`SELECT count(*)::int AS n FROM participants WHERE tenant_id=$1 AND status='ACTIVE' AND segment='DORMANT'`, [tenant.id]);
+assert.equal(dash.kpis.dormant, dormantSeg);
+const [{ n: activeAny }] = await q(`SELECT count(*)::int AS n FROM participants WHERE tenant_id=$1 AND GREATEST(last_scan_at, last_purchase_at) > now() - interval '30 days'`, [tenant.id]);
+assert.equal(dash.kpis.active_30d, activeAny);
+ok('dashboard: dealers who buy count as active (L1); Dormant matches Segments, 45 days (L2)');
 
 console.log(`\nAll ${passed} Phase 4 checks passed.`);
 fake.close();

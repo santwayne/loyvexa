@@ -1,13 +1,12 @@
 import { query } from '../../db/pool.js';
 import { computeMetric, evaluate, progressFor } from '../schemes.js';
 import * as ledger from '../ledger.js';
-import { canOrder } from '../orders.js';
 import {
-  ACTION_TYPES, BASE_WIN_RATE, CHANNEL, DAY, aiSettings, ist, isoWeek, rupee, shortDate,
+  ACTION_TYPES, BASE_WIN_RATE, CHANNEL, DAY, actionTypesFor, aiSettings, ist, isoWeek, rupee, shortDate,
 } from './settings.js';
 
 /**
- * The planner: finds candidate actions, ranks them by expected value × the
+ * The planner (loyalty actions only): finds candidate actions, ranks them by expected value × the
  * brand's own learned win rate, applies the guardrails and saves the plan.
  * Nothing here contacts anyone — that is the executor's job, after approval.
  */
@@ -23,41 +22,6 @@ export async function winRates(tenantId) {
       FROM ai_actions WHERE tenant_id=$1 AND outcome IS NOT NULL AND executed_at > now() - interval '90 days' GROUP BY 1`, [tenantId]);
   const out = { ...BASE_WIN_RATE };
   for (const r of rows) out[r.type] = (r.won + BASE_WIN_RATE[r.type] * 5) / (r.n + 5);
-  return out;
-}
-
-// ── (a) Reorder due: each dealer's own buying rhythm ─────────────────────
-async function reorderCandidates(tenant, s, today) {
-  const types = s.purchaseEarnTypes?.length ? s.purchaseEarnTypes : PURCHASE_TYPES;
-  const { rows } = await query(`
-    WITH inv AS (
-      SELECT i.participant_id, i.invoice_date, i.total_paise,
-             lag(i.invoice_date) OVER (PARTITION BY i.participant_id ORDER BY i.invoice_date) AS prev
-        FROM invoices i JOIN participants p ON p.id=i.participant_id
-       WHERE i.tenant_id=$1 AND i.status='PROCESSED' AND i.doc_type='INVOICE' AND p.status='ACTIVE' AND p.type = ANY($3::text[])
-         AND i.invoice_date > $2::date - 365
-    )
-    SELECT participant_id, count(*)::int AS n, max(invoice_date) AS last_date,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY (invoice_date - prev)) FILTER (WHERE prev IS NOT NULL AND invoice_date > prev) AS gap,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY total_paise) AS value
-      FROM inv GROUP BY 1 HAVING count(*) >= $4`, [tenant.id, today, types, s.aiReorderMinOrders]);
-  const out = [];
-  for (const r of rows) {
-    const gap = Number(r.gap);
-    if (!(gap >= 3)) continue;
-    const since = daysBetween(r.last_date, today);
-    if (since < Math.round(gap) || since >= gap * 2.5) continue; // not due yet / gone quiet (win-back territory)
-    const { rows: basket } = await query(`
-      SELECT l.sku, coalesce(pr.name, l.item_name) AS name, sum(l.qty)::numeric AS qty, (pr.price_paise IS NOT NULL AND pr.active) AS orderable
-        FROM invoices i JOIN invoice_lines l ON l.invoice_id=i.id LEFT JOIN products pr ON pr.tenant_id=i.tenant_id AND pr.sku=l.sku
-       WHERE i.participant_id=$1 AND i.status='PROCESSED' AND i.doc_type='INVOICE' AND i.invoice_date=$2
-       GROUP BY 1,2,4 ORDER BY sum(l.amount_paise) DESC LIMIT 8`, [r.participant_id, r.last_date]);
-    out.push({
-      type: 'REORDER_NUDGE', participantId: r.participant_id, expected: Math.round(Number(r.value)),
-      dedupe: `REORDER:${r.participant_id}:${new Date(r.last_date).toISOString().slice(0, 10)}`,
-      facts: { gapDays: Math.round(gap), sinceDays: since, lastDate: r.last_date, orders: r.n, basket: basket.map((b) => ({ sku: b.sku, name: b.name, qty: Number(b.qty), orderable: !!b.orderable })) },
-    });
-  }
   return out;
 }
 
@@ -118,19 +82,6 @@ async function mechanicCandidates(tenant, s, today) {
   }));
 }
 
-// ── (e) Overdue payments (from Korvo / Tally) ────────────────────────────
-async function paymentCandidates(tenant, s, today) {
-  const { rows } = await query(`
-    SELECT o.* FROM dealer_outstanding o JOIN participants p ON p.id=o.participant_id
-     WHERE o.tenant_id=$1 AND p.status='ACTIVE' AND o.overdue_paise >= $2 AND o.days_overdue >= $3`,
-  [tenant.id, s.aiOverdueMinRupees * 100, s.aiOverdueDays]);
-  return rows.map((r) => ({
-    type: 'PAYMENT_REMINDER', participantId: r.participant_id, expected: Number(r.overdue_paise),
-    dedupe: `PAY:${r.participant_id}:${isoWeek(new Date(`${today}T00:00:00Z`))}`,
-    facts: { overduePaise: Number(r.overdue_paise), outstandingPaise: Number(r.outstanding_paise), daysOverdue: r.days_overdue, oldestDue: r.oldest_due_date },
-  }));
-}
-
 // ── (f) Fraud: repeated flags with money waiting to be paid ──────────────
 async function fraudCandidates(tenant, s) {
   const { rows } = await query(`
@@ -181,18 +132,6 @@ async function compose(tenant, s, c, p) {
   const f = c.facts;
   const nm = p ? first(p) : '';
   switch (c.type) {
-    case 'REORDER_NUDGE': {
-      const items = f.basket.slice(0, 5).map((b) => `• ${b.name} × ${b.qty.toLocaleString('en-IN')}`).join('\n');
-      const canReply = canOrder(tenant, p) && f.basket.some((b) => b.orderable);
-      const msg = hi(p)
-        ? `Namaste ${nm} ji 🙏 ${tenant.name} se.\nAapka pichla order ${shortDate(f.lastDate)} ko tha:\n${items}\n${canReply ? 'Wahi dobara mangwana hai? *REORDER* likho, cart ready ho jayega.' : 'Naya order chahiye toh yahan bata do.'}`
-        : `Hello ${nm} 🙏 from ${tenant.name}.\nYour last order was on ${shortDate(f.lastDate)}:\n${items}\n${canReply ? 'Want the same again? Reply *REORDER* and your cart will be ready.' : 'Reply here if you need a new order.'}`;
-      return {
-        title: `Remind ${p.name || p.mobile} to reorder`,
-        reason: `Orders about every ${f.gapDays} days; last order ${f.sinceDays} days ago (${f.orders} orders this year).`,
-        payload: { message: msg, basket: f.basket, params: [nm, shortDate(f.lastDate), f.basket.slice(0, 4).map((b) => `${b.name} x${b.qty}`).join(', ')] },
-      };
-    }
     case 'WINBACK_CALL':
       return {
         title: `AI call to ${p.name || p.mobile}, quiet ${f.quietDays} days`,
@@ -223,16 +162,6 @@ async function compose(tenant, s, c, p) {
         payload: { message: msg, params: [nm, w.balance.toLocaleString('en-IN'), schLine || '-'] },
       };
     }
-    case 'PAYMENT_REMINDER': {
-      const msg = hi(p)
-        ? `Namaste ${nm} ji 🙏 ${tenant.name} accounts se.\nAapke account mein *${rupee(f.overduePaise)}* ka payment due date se aage chal raha hai${f.oldestDue ? ` (sabse purana ${shortDate(f.oldestDue)} se)` : ''}.\nJab ho sake payment kar dijiye. Agar pehle hi kar diya hai toh ise ignore karein 🙏`
-        : `Hello ${nm} 🙏 from ${tenant.name} accounts.\n*${rupee(f.overduePaise)}* on your account is past its due date${f.oldestDue ? ` (oldest from ${shortDate(f.oldestDue)})` : ''}.\nPlease clear it when you can. If you've already paid, please ignore this 🙏`;
-      return {
-        title: `Payment reminder to ${p.name || p.mobile}`,
-        reason: `${rupee(f.overduePaise)} overdue, up to ${f.daysOverdue} days late.`,
-        payload: { message: msg, overduePaise: f.overduePaise, params: [nm, rupee(f.overduePaise), f.oldestDue ? shortDate(f.oldestDue) : '-'] },
-      };
-    }
     case 'FRAUD_REVIEW':
       return {
         title: `Hold ${p.name || p.mobile}: ${f.flags} fraud flags, cash-out waiting`,
@@ -255,15 +184,16 @@ export async function planTenant(tenant, now = new Date()) {
   const today = ist(now).date;
   const rates = await winRates(tenant.id);
 
+  // Loyalty actions only (bundle rule). Reorder nudges and payment reminders
+  // are Regulars' / Korvo's job; win-back calls only with WayneRing.
+  const allowed = new Set(actionTypesFor(tenant));
   const all = [
-    ...(await reorderCandidates(tenant, s, today)),
-    ...(await winbackCandidates(tenant, s, today)),
+    ...(allowed.has('WINBACK_CALL') ? await winbackCandidates(tenant, s, today) : []),
     ...(await slabCandidates(tenant, s, today, now)),
     ...(await mechanicCandidates(tenant, s, today)),
-    ...(await paymentCandidates(tenant, s, today)),
     ...(await fraudCandidates(tenant, s)),
     ...(await schemeIdea(tenant, s, today, now)),
-  ].map((c) => ({ ...c, priority: (c.type === 'FRAUD_REVIEW' ? 3 : 1) * c.expected * rates[c.type] }))
+  ].filter((c) => allowed.has(c.type)).map((c) => ({ ...c, priority: (c.type === 'FRAUD_REVIEW' ? 3 : 1) * c.expected * rates[c.type] }))
     .sort((a, b) => b.priority - a.priority);
 
   // Guardrails, in one place.
@@ -279,7 +209,7 @@ export async function planTenant(tenant, now = new Date()) {
       ({ rows: [p] } = await query(`SELECT * FROM participants WHERE id=$1`, [c.participantId]));
       if (!p || p.status !== 'ACTIVE') continue;
       if (CHANNEL[c.type] === 'CALL' && p.dnd) continue;
-      if (['REORDER_NUDGE', 'SLAB_PUSH', 'MECHANIC_NUDGE'].includes(c.type) && p.wa_opt_out) continue;
+      if (['SLAB_PUSH', 'MECHANIC_NUDGE'].includes(c.type) && p.wa_opt_out) continue;
       const { rows: [open] } = await query(`SELECT 1 FROM ai_actions WHERE participant_id=$1 AND status IN ('PROPOSED','APPROVED','EXECUTING') LIMIT 1`, [p.id]);
       if (open) continue;
       if (CHANNEL[c.type] !== 'INTERNAL') {

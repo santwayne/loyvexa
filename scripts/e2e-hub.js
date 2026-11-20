@@ -129,5 +129,19 @@ assert.equal(page.status, 200);
 assert.match(page.text, /\/api\/hub\/sso\/exchange/);
 ok('/sso page is served');
 
+// 12. Bundle rules: the package's tools are kept; WhatsApp for this brand comes in through Regulars.
+const t12 = await api('POST', '/api/hub/provision', { token: hubToken('provision', bizId), body: body(true, { tools: ['LOYVEXA', 'GMB'] }) });
+assert.equal(t12.status, 200, JSON.stringify(t12.json));
+const { rows: [tb] } = await pool.query(`SELECT settings FROM tenants WHERE id=$1`, [tenantId]);
+assert.deepEqual(tb.settings.hub.tools, ['LOYVEXA', 'GMB']);
+ok('provision keeps the package tools (no WAYNERING = no AI calls)');
+const from = `9198140${run.slice(-5).replace(/\D/g, '7').padStart(5, '7')}`;
+const inb = await api('POST', '/api/hub/whatsapp/inbound', { token: hubToken('whatsapp-inbound', bizId), body: { messages: [{ from, text: 'points', id: `wamid.${run}` }] } });
+assert.equal(inb.status, 200, JSON.stringify(inb.json)); assert.equal(inb.json.handled, 1);
+const { rows: msgs } = await pool.query(`SELECT direction FROM messages WHERE tenant_id=$1 AND peer=$2 ORDER BY id`, [tenantId, from]);
+assert.deepEqual(msgs.map((m) => m.direction), ['IN', 'OUT']);
+assert.equal((await api('POST', '/api/hub/whatsapp/inbound', { token: hubToken('provision', bizId), body: { messages: [] } })).status, 401);
+ok('Regulars forwards a WhatsApp message → Loyvexa bot answers (wrong-purpose token refused)');
+
 console.log(`\n${passed} passed`);
 await pool.end();
