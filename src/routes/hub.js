@@ -9,12 +9,13 @@ import { AppError, ah, forbidden, parse, unauthorized } from '../lib/errors.js';
 import { signAdmin } from '../middleware/auth.js';
 import { handleInbound } from '../services/bot.js';
 import { applyStatus } from '../services/campaigns.js';
+import { linkKorvo } from '../services/korvoLink.js';
 
 /**
- * Regulars hub auto-connect (Nov 2026).
+ * Loopdesk hub auto-connect (Nov 2026).
  *
- * Regulars (regulars.wayneesolutions.com) is where Wayne E Solutions sells
- * and bills every product. When a client's bundle includes Loyvexa, the hub:
+ * The Loopdesk hub (app.loopdeskai.wayneesolutions.com, formerly the Regulars
+ * hub) is where Wayne E Solutions sells and bills every product. When a client's bundle includes Loyvexa, the hub:
  *
  *   POST /api/hub/provision        creates the brand + its first admin (the owner),
  *                                  or updates it; active=false pauses it
@@ -90,6 +91,8 @@ const provisionSchema = z.object({
     phone: z.string().optional().nullable(),
   }),
   owner: z.object({ name: z.string().min(1), email: z.string().email(), phone: z.string().optional().nullable() }),
+  // Distributor Pack: the client's Korvo company, set up by the hub just before Loyvexa.
+  korvo: z.object({ companyCode: z.string().min(2).max(40), companyId: z.string().nullable().optional(), baseUrl: z.string().url().nullable().optional() }).optional(),
 }).passthrough();
 
 r.post('/provision', ah(async (req, res) => {
@@ -129,10 +132,25 @@ r.post('/provision', ah(async (req, res) => {
   });
 
   const t = out.tenant;
+  // L4: link to Korvo by itself (was "Connectors → Connect Korvo DMS" by hand).
+  // Only when not linked to this company yet; a failure never fails the set-up,
+  // it shows in the hub's set-up result and the next provision tries again.
+  let korvoLink;
+  const code = b.korvo?.companyCode?.toUpperCase();
+  if (b.active && code && t.korvo?.companyCode !== code) {
+    try {
+      await linkKorvo(t, { companyCode: code, korvoBaseUrl: b.korvo.baseUrl || undefined });
+      korvoLink = { linked: true, companyCode: code };
+    } catch (e) {
+      korvoLink = { linked: false, companyCode: code, error: e.message };
+    }
+  } else if (code) {
+    korvoLink = { linked: t.korvo?.companyCode === code, companyCode: code };
+  }
   res.json({
     accountId: t.id,
     status: t.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
-    data: { slug: t.slug, name: t.name, created: out.created, consoleUrl: `${config.publicBaseUrl}/admin/` },
+    data: { slug: t.slug, name: t.name, created: out.created, consoleUrl: `${config.publicBaseUrl}/admin/`, ...(korvoLink ? { korvo: korvoLink } : {}) },
   });
 }));
 
@@ -141,7 +159,7 @@ r.post('/sso/exchange', ah(async (req, res) => {
   const claims = await verifyHubToken(token, 'sso');
   const { rows: [t] } = await query(`SELECT * FROM tenants WHERE hub_business_id=$1`, [claims.sub]);
   if (!t || (claims.acct && claims.acct !== t.id)) throw unauthorized('Brand not found for this business');
-  if (t.status !== 'ACTIVE') throw forbidden('This brand is paused. Renew the plan in your Regulars account.');
+  if (t.status !== 'ACTIVE') throw forbidden('This brand is paused. Renew the plan in your Loopdesk account.');
   // The owner's own admin login if it exists, else the brand's first admin.
   const { rows: [u] } = await query(
     `SELECT * FROM admin_users WHERE tenant_id=$1 AND status='ACTIVE' AND role IN ('TENANT_ADMIN','TENANT_STAFF')

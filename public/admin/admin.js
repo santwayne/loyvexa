@@ -436,8 +436,8 @@ views.whatsapp = async () => {
   $('main').innerHTML = `<h2>WhatsApp</h2>
   <div class="grid2">
     ${setupHere ? '' : `<div class="panel"><h3>Number</h3>
-      <p>Your WhatsApp number is set up once in <b>Regulars → Settings</b> and shared by all your tools. Loyvexa's bot (points, schemes, orders), OTPs and campaigns go out from that number.</p>
-      ${wb.whatsappViaRegulars ? '<p><span class="pill ok">Connected through Regulars</span></p>' : '<p><span class="pill warn">Waiting for set-up</span> <span class="muted">REGULARS_API_URL is not set on the Loyvexa server yet.</span></p>'}
+      <p>Your WhatsApp number is set up once in <b>Loopdesk → Settings</b> and shared by all your tools. Loyvexa's bot (points, schemes, orders), OTPs and campaigns go out from that number.</p>
+      ${wb.whatsappViaRegulars ? '<p><span class="pill ok">Connected through Loopdesk</span></p>' : '<p><span class="pill warn">Waiting for set-up</span> <span class="muted">REGULARS_API_URL is not set on the Loyvexa server yet.</span></p>'}
       <p class="muted">Mode: <b>${esc(sendMode)}</b>${sendMode === 'mock' ? ' — messages are saved here, not sent.' : ''}</p></div>`}
     ${setupHere ? `<div class="panel"><h3>Number</h3>
       ${channel ? `<p><span class="pill ok">Connected</span> ${esc(channel.display_number || channel.phone_number_id)}</p>` : '<p><span class="pill warn">Not connected</span></p>'}
@@ -546,7 +546,7 @@ views.orders = async () => {
 views.campaigns = async () => {
   const [{ campaigns }, { schemes }] = await Promise.all([api('/api/admin/wa-campaigns'), api('/api/admin/schemes')]);
   $('main').innerHTML = `<h2>WhatsApp campaigns</h2>
-  <div class="panel"><h3>New campaign</h3><p class="muted">${bundle.whatsappSetupHere ? 'Uses a template approved in Meta Business Manager.' : 'You choose who gets it here; it goes out from your Regulars WhatsApp number with a template approved there.'} People who sent STOP are never included. Placeholders: <code>{name}</code> <code>{balance}</code> <code>{brand}</code> <code>{scheme_progress}</code> <code>{app_link}</code></p>
+  <div class="panel"><h3>New campaign</h3><p class="muted">${bundle.whatsappSetupHere ? 'Uses a template approved in Meta Business Manager.' : 'You choose who gets it here; it goes out from your Loopdesk WhatsApp number with a template approved there.'} People who sent STOP are never included. Placeholders: <code>{name}</code> <code>{balance}</code> <code>{brand}</code> <code>{scheme_progress}</code> <code>{app_link}</code></p>
     <div class="row"><div><label>Name</label><input id="wName" placeholder="Diwali scheme launch"></div><div><label>Template name (Meta)</label><input id="wTpl" placeholder="scheme_launch_v1"></div><div><label>Language code</label><input id="wLang" value="hi"></div></div>
     <div class="row"><div><label>Template body params, one per line ({{1}}, {{2}}…)</label><textarea id="wParams" rows="3">{name}\n{scheme_progress}</textarea></div><div><label>Preview text (shown in the message log)</label><textarea id="wPrev" rows="3">Namaste {name}! {scheme_progress}</textarea></div></div>
     <div class="row"><div><label>Segments</label>${multi('wSeg', SEGS, 5)}</div><div><label>Types</label>${multi('wTypes', PT, 5)}</div>
@@ -610,7 +610,7 @@ views.ai = async () => {
     </div>`;
   const lv = (t) => `<select data-auto="${t.type}">${['SUGGEST', 'APPROVE', 'AUTO'].filter((l) => !(l === 'AUTO' && ['FRAUD_REVIEW', 'SCHEME_IDEA'].includes(t.type))).map((l) => `<option value="${l}" ${s.aiAutonomy[t.type] === l ? 'selected' : ''}>${AI_LEVEL[l]}</option>`).join('')}</select>`;
   $('main').innerHTML = `<h2>AI Channel Manager</h2>
-  <p class="muted" style="margin-top:-8px;max-width:760px">Every morning it reads purchases, scans, schemes and fraud flags, picks the loyalty actions most likely to bring in sales (scheme slab push, mechanic nudge, fraud hold, scheme idea${a.bundle?.calls ? ', win-back AI call' : ''}), and asks you on WhatsApp before it contacts anyone. Reorder and payment reminders are sent from Regulars. ${s.aiEnabled ? '<b>It is on.</b>' : '<b>It is off</b> — switch it on in the settings below.'}</p>
+  <p class="muted" style="margin-top:-8px;max-width:760px">Every morning it reads purchases, scans, schemes and fraud flags, picks the loyalty actions most likely to bring in sales (scheme slab push, mechanic nudge, fraud hold, scheme idea${a.bundle?.calls ? ', win-back AI call' : ''}), and asks you on WhatsApp before it contacts anyone. Reorder and payment reminders are sent from Loopdesk. ${s.aiEnabled ? '<b>It is on.</b>' : '<b>It is off</b> — switch it on in the settings below.'}</p>
   <div class="kpis">
     <div class="kpi"><div class="v">${inr(a.week.wonPaise)}</div><div class="l">Sales influenced, 7 days (${num(a.week.won)} wins)</div></div>
     <div class="kpi"><div class="v">${inr(a.month.wonPaise)}</div><div class="l">Sales influenced, 30 days</div></div>

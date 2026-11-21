@@ -7,11 +7,10 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { ah, parse, notFound, badRequest, unauthorized, forbidden, conflict } from '../lib/errors.js';
 import { requireAdmin, requireTenantScope, signAdmin } from '../middleware/auth.js';
-import { encrypt, newApiKey } from '../lib/crypto.js';
-import { sha256 } from '../lib/codes.js';
 import { getTenant, settingsOf } from '../services/tenants.js';
 import { ACTION_TYPES, LABEL, CHANNEL, actionTypesFor, aiSettings, ist } from '../services/ai/settings.js';
 import { bundleInfo } from '../services/bundle.js';
+import { linkKorvo } from '../services/korvoLink.js';
 import { planTenant, decide, composeBrief, sendBrief, stats, weeklyReportText } from '../services/ai/index.js';
 import { TEMPLATE_PARAMS } from '../services/ai/messaging.js';
 
@@ -117,39 +116,8 @@ r.get('/admin/korvo', ...staff, ah(async (req, res) => {
  */
 r.post('/admin/korvo/link', ...adminOnly, ah(async (req, res) => {
   const b = parse(z.object({ companyCode: z.string().min(2).max(40), korvoBaseUrl: z.string().url().optional(), earnOn: z.enum(['approved', 'delivered']).optional(), active: z.boolean().optional() }), req.body);
-  if (config.hubSecret.length < 32) throw badRequest('HUB_NOT_CONFIGURED', 'HUB_SECRET_KORVO is not set on Loyvexa (32+ characters, same value as HUB_SECRET on Korvo)');
   const tenant = await getTenant(req.tenantId);
-  const base = (b.korvoBaseUrl || tenant.korvo?.baseUrl || config.korvo.baseUrl || '').replace(/\/$/, '');
-  if (!base) throw badRequest('NO_KORVO_URL', 'Korvo URL is missing (KORVO_BASE_URL or korvoBaseUrl)');
-  const earnOn = b.earnOn || 'delivered';
-
-  const key = newApiKey('lvx');
-  const { rows: [existing] } = await query(`SELECT * FROM connectors WHERE tenant_id=$1 AND type='ROYAL' ORDER BY created_at LIMIT 1`, [req.tenantId]);
-  const cfg = { ...(existing?.config || {}), allowTokenExchange: true, earnOn };
-  const connector = existing
-    ? (await query(`UPDATE connectors SET api_key_hash=$2, api_key_prefix=$3, config=$4, status='ACTIVE' WHERE id=$1 RETURNING *`, [existing.id, sha256(key), key.slice(0, 10), cfg])).rows[0]
-    : (await query(`INSERT INTO connectors (tenant_id, type, name, api_key_hash, api_key_prefix, config) VALUES ($1,'ROYAL','Korvo DMS',$2,$3,$4) RETURNING *`, [req.tenantId, sha256(key), key.slice(0, 10), cfg])).rows[0];
-
-  const token = jwt.sign({ purpose: 'provision' }, config.hubSecret, { algorithm: 'HS256', issuer: 'loyvexa', audience: 'korvo', subject: tenant.id, expiresIn: 60, jwtid: crypto.randomBytes(12).toString('hex') });
-  let j;
-  try {
-    const resp = await fetch(`${base}/api/v1/hub/provision`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ companyCode: b.companyCode, tenantSlug: tenant.slug, baseUrl: config.publicBaseUrl, connectorKey: key, earnOn, active: b.active !== false, rotateKey: !tenant.korvo?.apiKeyEnc }),
-      signal: AbortSignal.timeout(20000),
-    });
-    j = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw badRequest(j.code || 'KORVO_REFUSED', `Korvo: ${j.message || resp.status}`);
-  } catch (e) {
-    if (e.status) throw e;
-    throw badRequest('KORVO_UNREACHABLE', `Could not reach Korvo at ${base}: ${e.message}`);
-  }
-  const korvo = {
-    ...(tenant.korvo || {}), companyCode: b.companyCode.toUpperCase(), companyId: j.companyId, companyName: j.companyName, baseUrl: base, linkedAt: new Date().toISOString(),
-    ...(j.korvoApiKey ? { apiKeyEnc: encrypt(j.korvoApiKey) } : {}),
-  };
-  const settings = { ...(tenant.settings || {}), orderDms: 'korvo' };
-  await query(`UPDATE tenants SET korvo=$2, settings=$3 WHERE id=$1`, [req.tenantId, JSON.stringify(korvo), JSON.stringify(settings)]);
+  const { korvo, connector } = await linkKorvo(tenant, { companyCode: b.companyCode, korvoBaseUrl: b.korvoBaseUrl, earnOn: b.earnOn || 'delivered', active: b.active !== false });
   res.json({ linked: true, companyCode: korvo.companyCode, companyName: korvo.companyName, connectorId: connector.id, ordersGoTo: 'korvo', note: 'Korvo now sends dealers, products, orders and outstanding here nightly; WhatsApp orders go to Korvo for approval.' });
 }));
 
