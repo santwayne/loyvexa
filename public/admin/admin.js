@@ -244,6 +244,7 @@ views.settings = async () => {
   const appLink = `${location.origin}/app/?brand=${tenant.slug}`;
   const f = (k, l) => `<div><label>${l}</label><input type="number" data-set="${k}" value="${s[k]}"></div>`;
   $('main').innerHTML = `<h2>Settings</h2>
+  <p><a href="${(window.LOOPDESK_HUB || 'https://app.loopdeskai.wayneesolutions.com')}/dashboard">← Back to Loopdesk AI</a> <span class="muted">· business name, logo and WhatsApp number are managed there</span></p>
   <div class="panel"><h3>Mechanic app link</h3><p>Share this link on WhatsApp with your dealers and mechanics:</p><input readonly value="${esc(appLink)}"></div>
   <div class="panel"><h3>Programme rules</h3><div class="row">
     ${f('pointValuePaise', 'Value of 1 point (paise)')}${f('minRedeemPoints', 'Minimum points to cash out')}${f('maxRedeemPointsPerDay', 'Max cash-out points per day')}
@@ -436,7 +437,7 @@ views.whatsapp = async () => {
   $('main').innerHTML = `<h2>WhatsApp</h2>
   <div class="grid2">
     ${setupHere ? '' : `<div class="panel"><h3>Number</h3>
-      <p>Your WhatsApp number is set up once in <b>Loopdesk → Settings</b> and shared by all your tools. Loyvexa's bot (points, schemes, orders), OTPs and campaigns go out from that number.</p>
+      <p>Your WhatsApp number is set up once in <a href="${(window.LOOPDESK_HUB || 'https://app.loopdeskai.wayneesolutions.com')}/dashboard/settings"><b>Loopdesk → Settings</b></a> and shared by all your tools. Loyvexa's bot (points, schemes, orders), OTPs and campaigns go out from that number.</p>
       ${wb.whatsappViaRegulars ? '<p><span class="pill ok">Connected through Loopdesk</span></p>' : '<p><span class="pill warn">Waiting for set-up</span> <span class="muted">REGULARS_API_URL is not set on the Loyvexa server yet.</span></p>'}
       <p class="muted">Mode: <b>${esc(sendMode)}</b>${sendMode === 'mock' ? ' — messages are saved here, not sent.' : ''}</p></div>`}
     ${setupHere ? `<div class="panel"><h3>Number</h3>

@@ -9,6 +9,7 @@
   var el = document.getElementById('ldHeader');
   if (!el) return;
   var HUB = (el.getAttribute('data-hub') || 'https://app.loopdeskai.wayneesolutions.com').replace(/\/$/, '');
+  window.LOOPDESK_HUB = HUB; // for "Back to Loopdesk" links in admin.js
   var tool = el.getAttribute('data-tool') || 'home';
   var logo = el.getAttribute('data-logo') || '/brand/icon-512.png';
   var TOOLS = [
@@ -18,7 +19,7 @@
     ['google', 'Google Profile', 'Reviews and Google listing', '/api/hub/open/gmb'],
     ['ads', 'Ads', 'AI video ads', '/api/hub/open/video'],
     ['loyvexa', 'Loyvexa', 'Channel loyalty', '/api/hub/open/loyvexa'],
-    ['korvo', 'Korvo', 'Distributor app with Tally', '/dashboard']
+    ['korvo', 'Korvo', 'Distributor app with Tally', '/api/hub/open/korvo']
   ];
   var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
   var current = TOOLS.filter(function (t) { return t[0] === tool; })[0] || TOOLS[0];
