@@ -58,6 +58,15 @@
   .aistrip { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; background:var(--brand-soft); color:var(--ink); border:1px solid #ffd2d9; border-radius:14px; padding:16px; margin-bottom:18px }
   .aistrip .v { font-size:24px; font-weight:600 } .aistrip .l { font-size:12px; color:var(--brand-ink) } .aistrip a { color:var(--brand); font-weight:500; cursor:pointer; text-decoration:underline }
   @media (max-width:800px) { .app { grid-template-columns:1fr } nav { display:flex; overflow:auto; gap:4px; border-right:0; border-bottom:1px solid var(--line) } nav .tenant { display:none } nav a { white-space:nowrap } .grid2 { grid-template-columns:1fr } }
+  /* QR viewer modal */
+  .qrmodal { position:fixed; inset:0; background:rgba(17,24,39,.55); z-index:100; display:flex; align-items:flex-start; justify-content:center; padding:4vh 16px; overflow:auto }
+  .qrbox { background:#fff; border-radius:16px; width:min(1000px,100%); padding:20px 22px; box-shadow:0 10px 30px rgba(0,0,0,.2) }
+  .qrhead { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:12px } .qrhead h3 { margin:0; font-size:18px; font-weight:600 }
+  .qrtools { display:flex; gap:8px; align-items:center; flex-wrap:wrap } .qrtools input { width:90px; padding:6px 10px }
+  .qrgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; margin-top:12px }
+  .qrcard { border:1px solid var(--line); border-radius:12px; padding:10px; text-align:center; font-size:12px } .qrcard svg { width:100%; height:auto; display:block }
+  .qrcard .c { font-family:var(--ld-font-mono); font-weight:600; font-size:12.5px; margin-top:4px; word-break:break-all } .qrcard .s { color:var(--subtle) }
+  .qrcard a { font-size:12px; color:var(--brand); cursor:pointer; text-decoration:underline }
 </style>
 </head>
 <body>

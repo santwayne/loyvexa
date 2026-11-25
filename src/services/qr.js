@@ -2,6 +2,7 @@ import { tx, query } from '../db/pool.js';
 import { randomCode, formatCode } from '../lib/codes.js';
 import { config } from '../config.js';
 import { badRequest, notFound } from '../lib/errors.js';
+import QRCode from 'qrcode';
 
 export const MAX_BATCH = 100000;
 export const codeUrl = (code) => `${config.publicBaseUrl}/q/${code}`;
@@ -65,6 +66,29 @@ export async function streamBatchCsv(res, { tenantId, batchId }) {
     last = rows[rows.length - 1].serial_no;
   }
   res.end();
+}
+
+/** A page of a batch's codes with ready-to-render QR SVGs, for on-screen view and print sheets. */
+export const MAX_LABEL_PAGE = 500;
+export async function listBatchLabels({ tenantId, batchId, offset = 0, limit = 100 }) {
+  const lim = Math.min(Math.max(Number(limit) || 100, 1), MAX_LABEL_PAGE);
+  const off = Math.max(Number(offset) || 0, 0);
+  const { rows: [batch] } = await query(
+    `SELECT b.id, b.label, b.quantity, b.mfg_date, b.status, p.sku, p.name AS product_name
+       FROM qr_batches b JOIN products p ON p.id=b.product_id WHERE b.id=$1 AND b.tenant_id=$2`,
+    [batchId, tenantId]);
+  if (!batch) throw notFound('Batch');
+  const { rows } = await query(
+    `SELECT serial_no, code, status FROM qr_codes WHERE batch_id=$1 ORDER BY serial_no OFFSET $2 LIMIT $3`, [batchId, off, lim]);
+  const codes = await Promise.all(rows.map(async (r) => ({
+    serialNo: r.serial_no,
+    code: r.code,
+    codePrinted: formatCode(r.code),
+    status: r.status,
+    url: codeUrl(r.code),
+    svg: await QRCode.toString(codeUrl(r.code), { type: 'svg', errorCorrectionLevel: 'M', margin: 1 }),
+  })));
+  return { batch, offset: off, limit: lim, total: batch.quantity, codes };
 }
 
 /** Public authenticity check — anyone can scan the QR with a normal camera. */

@@ -103,6 +103,10 @@ r.get('/qr-batches', ah(async (req, res) => {
   res.json({ batches: rows });
 }));
 r.get('/qr-batches/:id/export.csv', ah(async (req, res) => qr.streamBatchCsv(res, { tenantId: req.tenantId, batchId: req.params.id })));
+// On-screen QR view + print sheets: a page of codes with inline SVGs (max 500 per call).
+r.get('/qr-batches/:id/labels', ah(async (req, res) => {
+  res.json(await qr.listBatchLabels({ tenantId: req.tenantId, batchId: req.params.id, offset: req.query.offset, limit: req.query.limit }));
+}));
 r.post('/qr-batches/:id/void', adminOnly, ah(async (req, res) => {
   const { rows: [b] } = await query(`UPDATE qr_batches SET status='VOID' WHERE id=$1 AND tenant_id=$2 RETURNING *`, [req.params.id, req.tenantId]);
   if (!b) throw notFound('Batch');
