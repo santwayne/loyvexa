@@ -154,12 +154,12 @@ views.qr = async () => {
     <div><label>Quantity</label><input id="bQty" type="number" min="1" max="100000" value="1000"></div>
     <div><label>Mfg date</label><input id="bDate" type="date"></div><div><label>Label / lot no.</label><input id="bLabel"></div>
     <div style="flex:0"><button class="p" id="bGen">Generate</button></div></div>
-    <p class="muted">Download the CSV and send it to your label printer / packaging vendor. Each row has a unique code and its QR link.</p><div class="err" id="bErr"></div></div>
+    <p class="muted">Click <b>View QR</b> to see the codes on screen, download a QR image, or print a label sheet. For bulk printing, download the CSV and send it to your label printer / packaging vendor — each row has a unique code and its QR link.</p><div class="err" id="bErr"></div></div>
   <div class="panel"><table><tr><th>Created</th><th>Product</th><th>Label</th><th>Mfg</th><th class="num">Qty</th><th class="num">Scanned</th><th>Status</th><th></th></tr>
   ${batches.map((b) => `<tr><td>${dt(b.created_at)}</td><td>${esc(b.sku)} — ${esc(b.product_name)}</td><td>${esc(b.label || '—')}</td><td>${b.mfg_date ? esc(b.mfg_date.slice(0, 10)) : '—'}</td>
     <td class="num">${num(b.quantity)}</td><td class="num">${num(b.scanned)} (${Math.round((b.scanned / b.quantity) * 100)}%)</td>
     <td>${b.status === 'ACTIVE' ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Void</span>'}</td>
-    <td><button class="sm" data-csv="${b.id}" data-name="${esc(b.sku)}">CSV</button> ${b.status === 'ACTIVE' ? `<button class="sm danger" data-void="${b.id}">Void</button>` : ''}</td></tr>`).join('')}</table></div>`;
+    <td><button class="sm p" data-viewqr="${b.id}">View QR</button> <button class="sm" data-csv="${b.id}" data-name="${esc(b.sku)}">CSV</button> ${b.status === 'ACTIVE' ? `<button class="sm danger" data-void="${b.id}">Void</button>` : ''}</td></tr>`).join('')}</table></div>`;
   $('bGen').onclick = async () => {
     $('bGen').disabled = true;
     try { await api('/api/admin/qr-batches', { method: 'POST', body: { productId: $('bProd').value, quantity: Number($('bQty').value), mfgDate: $('bDate').value || undefined, label: $('bLabel').value || undefined } }); render(); }
@@ -169,11 +169,89 @@ views.qr = async () => {
     const blob = await api(`/api/admin/qr-batches/${b.dataset.csv}/export.csv`, { blob: true });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `qr-${b.dataset.name}-${b.dataset.csv.slice(0, 8)}.csv`; a.click();
   });
+  document.querySelectorAll('[data-viewqr]').forEach((b) => b.onclick = () => openQrViewer(b.dataset.viewqr));
   document.querySelectorAll('[data-void]').forEach((b) => b.onclick = async () => {
     if (!confirm('Void this batch? Unscanned codes will stop working permanently.')) return;
     await api(`/api/admin/qr-batches/${b.dataset.void}/void`, { method: 'POST' }); render();
   });
 };
+
+// ---------- QR viewer (on-screen codes, PNG download, printable label sheet) ----------
+const QR_PAGE = 60; const QR_PRINT_MAX = 500;
+async function openQrViewer(batchId) {
+  document.getElementById('qrModal')?.remove();
+  const m = document.createElement('div'); m.id = 'qrModal'; m.className = 'qrmodal';
+  m.innerHTML = '<div class="qrbox"><div class="muted">Loading QR codes…</div></div>';
+  document.body.appendChild(m);
+  const close = () => { m.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => e.key === 'Escape' && close();
+  document.addEventListener('keydown', onKey);
+  m.onclick = (e) => { if (e.target === m) close(); };
+  let offset = 0;
+  const load = async () => {
+    let d;
+    try { d = await api(`/api/admin/qr-batches/${batchId}/labels?offset=${offset}&limit=${QR_PAGE}`); }
+    catch (e) { m.querySelector('.qrbox').innerHTML = `<div class="err">${esc(e.message)}</div><button id="qrClose">Close</button>`; m.querySelector('#qrClose').onclick = close; return; }
+    const { batch, codes, total } = d;
+    const from = total ? offset + 1 : 0; const to = offset + codes.length;
+    m.querySelector('.qrbox').innerHTML = `
+      <div class="qrhead"><div><h3>QR codes — ${esc(batch.sku)} · ${esc(batch.product_name)}</h3>
+        <div class="muted">${batch.label ? `Label ${esc(batch.label)} · ` : ''}Showing ${num(from)}–${num(to)} of ${num(total)}${batch.status === 'VOID' ? ' · <span class="pill bad">Void</span>' : ''}</div></div>
+        <button id="qrClose">Close</button></div>
+      <div class="qrtools">
+        <button class="sm" id="qrPrev" ${offset === 0 ? 'disabled' : ''}>← Prev</button>
+        <button class="sm" id="qrNext" ${to >= total ? 'disabled' : ''}>Next →</button>
+        <span class="muted" style="margin-left:12px">Print serials</span>
+        <input id="qrPFrom" type="number" min="1" max="${total}" value="${from || 1}"> <span class="muted">to</span>
+        <input id="qrPTo" type="number" min="1" max="${total}" value="${Math.min((from || 1) + QR_PRINT_MAX - 1, total)}">
+        <button class="sm p" id="qrPrint">Print sheet / PDF</button>
+        <span class="muted" style="font-size:12px">(max ${QR_PRINT_MAX} per sheet — use CSV for bigger runs)</span>
+      </div>
+      <div class="err" id="qrErr"></div>
+      <div class="qrgrid">${codes.map((c) => `<div class="qrcard">${c.svg}
+        <div class="c">${esc(c.codePrinted)}</div><div class="s">#${c.serialNo}${c.status !== 'UNUSED' ? ` · ${esc(c.status)}` : ''}</div>
+        <a data-png="${esc(c.code)}">Download PNG</a></div>`).join('') || '<div class="muted">No codes in this batch.</div>'}</div>`;
+    m.querySelector('#qrClose').onclick = close;
+    m.querySelector('#qrPrev').onclick = () => { offset = Math.max(0, offset - QR_PAGE); load(); };
+    m.querySelector('#qrNext').onclick = () => { offset += QR_PAGE; load(); };
+    m.querySelectorAll('[data-png]').forEach((a) => a.onclick = async () => {
+      try {
+        const blob = await api(`/api/admin/qr/${encodeURIComponent(a.dataset.png)}.png`, { blob: true });
+        const l = document.createElement('a'); l.href = URL.createObjectURL(blob); l.download = `qr-${a.dataset.png}.png`; l.click();
+      } catch (e) { m.querySelector('#qrErr').textContent = e.message; }
+    });
+    m.querySelector('#qrPrint').onclick = () => printQrSheet(batch, Number(m.querySelector('#qrPFrom').value), Number(m.querySelector('#qrPTo').value), m.querySelector('#qrErr'));
+  };
+  load();
+}
+
+async function printQrSheet(batch, from, to, errEl) {
+  errEl.textContent = '';
+  if (!from || !to || to < from) { errEl.textContent = 'Enter a valid serial range.'; return; }
+  if (to - from + 1 > QR_PRINT_MAX) { errEl.textContent = `Max ${QR_PRINT_MAX} labels per sheet.`; return; }
+  const w = window.open('', '_blank');
+  if (!w) { errEl.textContent = 'Pop-up blocked — allow pop-ups for this site to print.'; return; }
+  w.document.write('<p style="font-family:sans-serif">Preparing labels…</p>');
+  try {
+    const { codes } = await api(`/api/admin/qr-batches/${batch.id}/labels?offset=${from - 1}&limit=${to - from + 1}`);
+    const title = `${batch.sku} — ${batch.product_name}${batch.label ? ` · ${batch.label}` : ''}`;
+    w.document.open();
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>QR labels · ${esc(title)}</title><style>
+      @page { size: A4; margin: 10mm }
+      body { font-family: system-ui, sans-serif; margin: 0 }
+      h1 { font-size: 13px; margin: 0 0 6mm; font-weight: 600 }
+      .g { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4mm }
+      .l { border: 1px dashed #bbb; padding: 2mm; text-align: center; break-inside: avoid; page-break-inside: avoid }
+      .l svg { width: 30mm; height: 30mm; display: block; margin: 0 auto }
+      .c { font-family: ui-monospace, Menlo, monospace; font-size: 9pt; font-weight: 600; margin-top: 1mm }
+      .s { font-size: 7.5pt; color: #555 }
+      @media print { h1 { display: none } }
+    </style></head><body><h1>${esc(title)} · serials ${from}–${from + codes.length - 1}</h1><div class="g">
+    ${codes.map((c) => `<div class="l">${c.svg}<div class="c">${esc(c.codePrinted)}</div><div class="s">${esc(batch.sku)} · #${c.serialNo}</div></div>`).join('')}
+    </div><script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
+    w.document.close();
+  } catch (e) { w.close(); errEl.textContent = e.message; }
+}
 
 // ---------- participants ----------
 let pQuery = ''; let pSeg = '';
