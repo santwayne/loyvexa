@@ -1,3 +1,4 @@
+import { flagByKey } from './fraud.js';
 import { tx, query } from '../db/pool.js';
 import { randomCode, formatCode } from '../lib/codes.js';
 import { config } from '../config.js';
@@ -103,6 +104,14 @@ export async function verify({ code, ip, userAgent }) {
   await query(`INSERT INTO verify_checks (tenant_id, code, result, ip, user_agent) VALUES ($1,$2,$3,$4,$5)`,
     [q?.tenant_id || null, code, result, ip, userAgent?.slice(0, 200)]);
   if (q) await query(`UPDATE qr_codes SET verify_count = verify_count + 1 WHERE id = $1`, [q.id]);
+  // Testing report #1: these were counted on the dashboard ("reused codes") but never became flags.
+  // A claimed code being checked again usually means the sticker was copied onto a fake product.
+  if (q && (result === 'ALREADY_SCANNED' || result === 'VOID')) {
+    await flagByKey({ query }, {
+      tenantId: q.tenant_id, rule: result === 'VOID' ? 'VOID_CODE_CHECKED' : 'REUSED_CODE_CHECKED', key: q.code,
+      details: { code: q.code, product: q.product_name, sku: q.sku, ip, timesChecked: Number(q.verify_count || 0) + 1, claimedAt: q.scanned_at },
+    }).catch((e) => console.error('fraud flag (verify) failed', e.message));
+  }
   if (!q) return { result, genuine: false };
   return {
     result,

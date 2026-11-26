@@ -304,11 +304,15 @@ const RULES = {
   BURST_SCANNING: 'Scanning unusually fast',
   DAILY_LIMIT_REACHED: 'Hit the daily scan limit',
   SHARED_DEVICE: 'Same phone used by several accounts',
+  REUSED_CODE_CHECKED: 'An already-claimed code was checked again — possible copied sticker / fake product',
+  VOID_CODE_CHECKED: 'A cancelled code was checked by a customer',
+  VERIFY_RATE_LIMIT: 'Too many code checks from one phone / network in a minute',
+  REPEATED_DUPLICATE_SCANS: 'Kept re-scanning a code he already claimed',
 };
 views.fraud = async () => {
   const { flags } = await api('/api/admin/fraud-flags');
   $('main').innerHTML = `<h2>Fraud flags</h2><div class="panel">${flags.length ? `<table><tr><th>When</th><th>Participant</th><th>Rule</th><th>Details</th><th></th></tr>
-  ${flags.map((f) => `<tr><td>${dt(f.created_at)}</td><td>${esc(f.participant_name || '—')}<div class="muted">${esc(f.mobile || '')} · ${esc(f.participant_type || '')}</div></td>
+  ${flags.map((f) => `<tr><td>${dt(f.created_at)}</td><td>${f.participant_id ? `${esc(f.participant_name || '—')}<div class="muted">${esc(f.mobile || '')} · ${esc(f.participant_type || '')}</div>` : `<span class="muted">Public check</span><div class="muted">${esc(f.details?.code ? `Code ${f.details.code}` : f.details?.ip ? `IP ${f.details.ip}` : '')}</div>`}</td>
     <td><b>${esc(f.rule)}</b><div class="muted">${esc(RULES[f.rule] || '')}</div></td><td class="muted">${esc(JSON.stringify(f.details))}</td>
     <td><button class="sm" data-res="${f.id}">Resolve</button> ${f.participant_id ? `<button class="sm danger" data-blk="${f.participant_id}">Block user</button>` : ''}</td></tr>`).join('')}</table>` : '<p class="muted">No open flags 🎉</p>'}</div>`;
   document.querySelectorAll('[data-res]').forEach((b) => b.onclick = async () => { await api(`/api/admin/fraud-flags/${b.dataset.res}/resolve`, { method: 'POST' }); render(); });
@@ -513,6 +517,8 @@ views.whatsapp = async () => {
   const [{ channel, webhookUrl, sendMode, bundle: wb }, { messages }] = await Promise.all([api('/api/admin/channels/whatsapp'), api('/api/admin/messages')]);
   const setupHere = !wb || wb.whatsappSetupHere;
   $('main').innerHTML = `<h2>WhatsApp</h2>
+  ${sendMode !== 'live' ? '<div class="panel" style="border-left:4px solid #c62828"><b>Replies are NOT going to phones.</b> The server is in <code>mock</code> mode, so every reply is only saved in the log below. Set <code>WHATSAPP_SEND_MODE=live</code> on the Loyvexa server and restart.</div>' : ''}
+  <div class="panel"><div class="row" style="align-items:center"><h3 style="margin:0;flex:1">Connection check</h3><button class="sm" id="wCheck">Test WhatsApp connection</button></div><div id="wCheckOut" class="muted" style="margin-top:8px"></div></div>
   <div class="grid2">
     ${setupHere ? '' : `<div class="panel"><h3>Number</h3>
       <p>Your WhatsApp number is set up once in <a href="${(window.LOOPDESK_HUB || 'https://app.loopdeskai.wayneesolutions.com')}/dashboard/settings"><b>Loopdesk → Settings</b></a> and shared by all your tools. Loyvexa's bot (points, schemes, orders), OTPs and campaigns go out from that number.</p>
@@ -523,6 +529,7 @@ views.whatsapp = async () => {
       <p class="muted">Mode: <b>${esc(sendMode)}</b>${sendMode === 'mock' ? ' — replies are saved here, not sent. Set WHATSAPP_SEND_MODE=live after Meta approval.' : ''}</p>
       <label>Phone number ID (Meta)</label><input id="wPn" value="${esc(channel?.phone_number_id || '')}">
       <label>Display number</label><input id="wDn" value="${esc(channel?.display_number || '')}">
+      <label>WhatsApp Business Account ID (for the template list)</label><input id="wWaba" value="${esc(channel?.config?.wabaId || '')}" placeholder="1234567890">
       <label>Permanent access token ${channel?.has_token ? '(saved — leave empty to keep)' : ''}</label><input id="wTok" type="password">
       <label>OTP template name (Authentication)</label><input id="wOtp" value="${esc(channel?.config?.otpTemplate?.name || '')}">
       <button class="p" id="wSave" style="margin-top:12px">Save</button><div class="err" id="wErr"></div>
@@ -533,12 +540,22 @@ views.whatsapp = async () => {
       <div class="row" style="margin-top:8px"><div><input id="sText" placeholder="Message"></div><div style="flex:0"><button class="p" id="sSend">Send</button></div></div></div>
   </div>
   <div class="panel"><h3>Recent messages</h3><table><tr><th>When</th><th>Who</th><th></th><th>Message</th><th>Status</th></tr>
-    ${messages.slice(0, 60).map((m) => `<tr><td>${dt(m.created_at)}</td><td>${esc(m.participant_name || m.peer)}</td><td>${m.direction === 'IN' ? '⬅️' : '➡️'}</td><td style="white-space:pre-wrap;max-width:520px">${esc((m.body || '').slice(0, 300))}</td><td><span class="pill ${m.status === 'FAILED' ? 'bad' : ''}">${esc(m.status)}</span>${m.error ? `<div class="muted">${esc(m.error)}</div>` : ''}</td></tr>`).join('')}</table></div>`;
+    ${messages.slice(0, 60).map((m) => `<tr><td>${dt(m.created_at)}</td><td>${esc(m.participant_name || m.peer)}</td><td>${m.direction === 'IN' ? '⬅️' : '➡️'}</td><td style="white-space:pre-wrap;max-width:520px">${esc((m.body || '').slice(0, 300))}</td><td><span class="pill ${m.status === 'FAILED' ? 'bad' : m.status === 'MOCK' ? 'warn' : ['DELIVERED', 'READ'].includes(m.status) ? 'ok' : ''}" title="${m.status === 'MOCK' ? 'Saved only — not sent (mock mode)' : ''}">${esc(m.status === 'MOCK' ? 'NOT SENT (mock)' : m.status)}</span>${m.error ? `<div class="muted">${esc(m.error)}</div>` : ''}</td></tr>`).join('')}</table></div>`;
   if ($('wSave')) $('wSave').onclick = async () => {
     try {
-      await api('/api/admin/channels/whatsapp', { method: 'PUT', body: { phoneNumberId: $('wPn').value.trim(), displayNumber: $('wDn').value || undefined, accessToken: $('wTok').value || undefined, otpTemplate: $('wOtp').value ? { name: $('wOtp').value } : undefined } });
+      await api('/api/admin/channels/whatsapp', { method: 'PUT', body: { phoneNumberId: $('wPn').value.trim(), displayNumber: $('wDn').value || undefined, accessToken: $('wTok').value || undefined, wabaId: $('wWaba').value.trim() || undefined, otpTemplate: $('wOtp').value ? { name: $('wOtp').value } : undefined } });
       render();
     } catch (e) { $('wErr').textContent = e.message; }
+  };
+  $('wCheck').onclick = async () => {
+    $('wCheckOut').textContent = 'Checking…';
+    try {
+      const c = await api('/api/admin/channels/whatsapp/check');
+      $('wCheckOut').innerHTML = `${c.ok ? '<span class="pill ok">All good</span>' : '<span class="pill bad">Problem found</span>'}
+        ${c.number ? ` ${esc(c.number.display_phone_number || '')} · ${esc(c.number.verified_name || '')} · quality ${esc(c.number.quality_rating || '—')}` : ''}${c.note ? ` ${esc(c.note)}` : ''}
+        <div>Last 24h sent: ${esc(Object.entries(c.last24h).map(([k, v]) => `${k.toLowerCase()} ${v}`).join(' · ') || 'nothing')}</div>
+        ${c.problems.map((p) => `<div style="color:#c62828;margin-top:4px">• ${esc(p)}</div>`).join('')}`;
+    } catch (e) { $('wCheckOut').textContent = e.message; }
   };
   const bub = (t, cls) => { const d = document.createElement('div'); d.className = `bub ${cls}`; d.textContent = t; $('chat').appendChild(d); $('chat').scrollTop = 1e9; };
   $('sSend').onclick = async () => {
@@ -571,27 +588,45 @@ views.segments = async () => {
 
 views.calls = async () => {
   if (!bundle.calls) { $('main').innerHTML = '<h2>AI calls</h2><div class="panel muted">AI calls go out only through WayneRing, and WayneRing is not in your package. Ask Loopdesk to add it.</div>'; return; }
-  const { campaigns } = await api('/api/admin/call-campaigns');
+  const [{ campaigns }, { cities }] = await Promise.all([api('/api/admin/call-campaigns'), api('/api/admin/cities').catch(() => ({ cities: [] }))]);
   $('main').innerHTML = `<h2>AI calls</h2>
   <div class="panel"><h3>New call campaign</h3><p class="muted">Calls go out through WayneRing in Hindi, Punjabi or English, only during calling hours, never to DND numbers, and at most once a week per person. Calls never change points.</p>
     <div class="row"><div><label>Name</label><input id="cName" placeholder="Win back dormant mechanics"></div>
       <div><label>Script</label><select id="cScript"><option value="WINBACK">Win back (why did you stop?)</option><option value="SCHEME_REMINDER">Scheme reminder</option><option value="FEEDBACK">Feedback</option></select></div>
       <div><label>Language</label><select id="cLang"><option value="hi">Hindi</option><option value="pa">Punjabi</option><option value="en">English</option></select></div>
-      <div><label>City (optional)</label><input id="cCity"></div></div>
+      <div><label>City (optional)</label><input id="cCity" list="cCityList" autocomplete="off"><datalist id="cCityList">${cities.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div></div>
     <div class="row"><div><label>Segments</label>${multi('cSeg', SEGS, 5)}</div><div><label>Types</label>${multi('cTypes', PT, 5)}</div></div>
-    <button class="p" id="cCreate" style="margin-top:12px">Create &amp; launch</button><div class="err" id="cErr"></div></div>
+    <div id="cMatch" class="muted" style="margin-top:10px">Pick filters to see how many people will be called.</div>
+    <button class="p" id="cCreate" style="margin-top:12px" disabled>Create &amp; launch</button><div class="err" id="cErr"></div></div>
   <div class="panel"><table><tr><th>Campaign</th><th>Audience</th><th>Status</th><th class="num">Calls</th><th>Outcomes</th><th></th></tr>
   ${campaigns.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="muted">${esc(c.script.replace('_', ' '))} · ${esc(c.language)}</div></td>
     <td class="muted">${esc([c.segments.join(', '), c.participant_types.join(', '), c.city].filter(Boolean).join(' · ') || 'Everyone')}</td>
-    <td><span class="pill ${c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : ''}">${c.status}</span></td>
+    <td><span class="pill ${c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : c.status === 'CANCELLED' ? 'bad' : ''}">${c.status === 'CANCELLED' && c.note?.startsWith('Not started') ? 'NOT STARTED' : c.status}</span>${c.note ? `<div class="muted" style="max-width:260px">${esc(c.note)}</div>` : ''}</td>
     <td class="num">${num(c.stats.completed)} / ${num(c.stats.total)}</td>
     <td class="muted">${esc(Object.entries(c.stats.outcomes).map(([k, v]) => `${k.replace('_', ' ').toLowerCase()} ${v}`).join(' · ') || '—')}</td>
     <td><button class="sm" data-calls="${c.id}">Calls</button> ${['DRAFT', 'RUNNING'].includes(c.status) ? `<button class="sm danger" data-ccancel="${c.id}">Cancel</button>` : ''}</td></tr>`).join('')}</table></div><div id="callBox"></div>`;
+  // Testing report #5: live "X people match" count; launch stays off at 0.
+  const filters = () => ({ city: $('cCity').value.trim() || undefined, segments: sel('cSeg'), participantTypes: sel('cTypes') });
+  let matchTimer;
+  const checkMatch = () => { clearTimeout(matchTimer); matchTimer = setTimeout(async () => {
+    try {
+      const m = await api('/api/admin/call-campaigns/preview', { method: 'POST', body: filters() });
+      $('cCreate').disabled = !m.count;
+      $('cMatch').innerHTML = m.count
+        ? `<b>${m.count} ${m.count === 1 ? 'person matches' : 'people match'}</b>${m.dnd ? ` (${m.dnd} on DND will be skipped)` : ''} — ${m.sample.map((p) => esc(`${p.name || '—'} · ${p.city || ''}`)).join(', ')}${m.count > 5 ? '…' : ''}`
+        : `<b style="color:#c62828">0 people match — nothing to call.</b>${m.reasons.map((r) => `<div>• ${esc(r)}</div>`).join('')}${m.cities?.length ? `<div>Cities you have: ${m.cities.map((c) => `<a href="#" data-city="${esc(c.city)}">${esc(c.city)}</a> (${c.n})`).join(', ')}</div>` : ''}`;
+      document.querySelectorAll('[data-city]').forEach((a) => a.onclick = (e) => { e.preventDefault(); $('cCity').value = a.dataset.city; checkMatch(); });
+    } catch (e) { $('cMatch').textContent = e.message; }
+  }, 300); };
+  ['cCity', 'cSeg', 'cTypes'].forEach((id) => { $(id).addEventListener('input', checkMatch); $(id).addEventListener('change', checkMatch); });
+  checkMatch();
   $('cCreate').onclick = async () => {
     try {
       const { campaign } = await api('/api/admin/call-campaigns', { method: 'POST', body: { name: $('cName').value, script: $('cScript').value, language: $('cLang').value, city: $('cCity').value || undefined, segments: sel('cSeg'), participantTypes: sel('cTypes') } });
       const r = await api(`/api/admin/call-campaigns/${campaign.id}/launch`, { method: 'POST' });
-      alert(`${r.queued} calls queued · skipped: ${r.skipped.dnd} DND, ${r.skipped.cooldown} called this week`);
+      alert(r.queued
+        ? `${r.queued} calls queued · skipped: ${r.skipped.dnd} DND, ${r.skipped.cooldown} called this week${r.note ? `\n${r.note}` : ''}`
+        : `Campaign not started.\n${r.reason}`);
       await api('/api/admin/call-campaigns/dispatch', { method: 'POST' }); render();
     } catch (e) { $('cErr').textContent = e.message; }
   };
@@ -623,22 +658,34 @@ views.orders = async () => {
 };
 
 views.campaigns = async () => {
-  const [{ campaigns }, { schemes }] = await Promise.all([api('/api/admin/wa-campaigns'), api('/api/admin/schemes')]);
+  const [{ campaigns }, { schemes }, tpl] = await Promise.all([api('/api/admin/wa-campaigns'), api('/api/admin/schemes'), api('/api/admin/wa-templates').catch((e) => ({ templates: [], note: e.message }))]);
   $('main').innerHTML = `<h2>WhatsApp campaigns</h2>
   <div class="panel"><h3>New campaign</h3><p class="muted">${bundle.whatsappSetupHere ? 'Uses a template approved in Meta Business Manager.' : 'You choose who gets it here; it goes out from your Loopdesk WhatsApp number with a template approved there.'} People who sent STOP are never included. Placeholders: <code>{name}</code> <code>{balance}</code> <code>{brand}</code> <code>{scheme_progress}</code> <code>{app_link}</code></p>
-    <div class="row"><div><label>Name</label><input id="wName" placeholder="Diwali scheme launch"></div><div><label>Template name (Meta)</label><input id="wTpl" placeholder="scheme_launch_v1"></div><div><label>Language code</label><input id="wLang" value="hi"></div></div>
+    <div class="row"><div><label>Name</label><input id="wName" placeholder="Diwali scheme launch"></div><div><label>Approved template</label><select id="wTplSel">${tpl.templates.map((t, i) => `<option value="${i}">${esc(t.name)} · ${esc(t.language)}${t.category ? ` · ${esc(t.category.toLowerCase())}` : ''}</option>`).join('')}<option value="other">Other — type the name…</option></select>
+        <input id="wTpl" class="${tpl.templates.length ? 'hidden' : ''}" placeholder="scheme_launch_v1" style="margin-top:6px"></div><div><label>Language code</label><input id="wLang" value="hi"></div></div>
+    ${tpl.note ? `<p class="muted">${esc(tpl.note)}</p>` : ''}<div id="wTplBody" class="muted" style="white-space:pre-wrap"></div>
     <div class="row"><div><label>Template body params, one per line ({{1}}, {{2}}…)</label><textarea id="wParams" rows="3">{name}\n{scheme_progress}</textarea></div><div><label>Preview text (shown in the message log)</label><textarea id="wPrev" rows="3">Namaste {name}! {scheme_progress}</textarea></div></div>
     <div class="row"><div><label>Segments</label>${multi('wSeg', SEGS, 5)}</div><div><label>Types</label>${multi('wTypes', PT, 5)}</div>
       <div><label>Only people in scheme</label><select id="wScheme"><option value="">—</option>${schemes.filter((x) => x.status === 'ACTIVE').map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></div></div>
     <button class="p" id="wCreate" style="margin-top:12px">Create &amp; send</button><div class="err" id="wErr"></div></div>
   <div class="panel"><table><tr><th>Campaign</th><th>Template</th><th>Status</th><th class="num">Queued</th><th class="num">Sent</th><th class="num">Delivered</th><th class="num">Read</th><th class="num">Failed</th><th></th></tr>
   ${campaigns.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="muted">${esc([c.segments.join(', '), c.participant_types.join(', ')].filter(Boolean).join(' · ') || 'Everyone')}</div></td><td><code>${esc(c.template_name)}</code></td>
-    <td><span class="pill ${c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : ''}">${c.status}</span></td>
+    <td><span class="pill ${c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : c.status === 'CANCELLED' ? 'bad' : ''}">${c.status === 'CANCELLED' && c.note?.startsWith('Not started') ? 'NOT STARTED' : c.status}</span>${c.note ? `<div class="muted" style="max-width:260px">${esc(c.note)}</div>` : ''}</td>
     ${['QUEUED', 'SENT', 'DELIVERED', 'READ', 'FAILED'].map((k) => `<td class="num">${num(c.stats[k] || 0)}</td>`).join('')}
     <td>${['DRAFT', 'RUNNING'].includes(c.status) ? `<button class="sm danger" data-wcancel="${c.id}">Stop</button>` : ''}</td></tr>`).join('')}</table></div>`;
+  // Testing report #8: pick an approved template instead of typing its name
+  const pickTpl = () => {
+    const v = $('wTplSel').value;
+    $('wTpl').classList.toggle('hidden', v !== 'other');
+    if (v === 'other') { $('wTplBody').textContent = ''; return; }
+    const t = tpl.templates[Number(v)]; if (!t) return;
+    $('wTpl').value = t.name; $('wLang').value = t.language || 'en';
+    $('wTplBody').textContent = t.body ? `Template text: ${t.body}${t.params ? `\n→ needs ${t.params} param line(s) below` : ''}` : '';
+  };
+  $('wTplSel').onchange = pickTpl; pickTpl();
   $('wCreate').onclick = async () => {
     try {
-      const { campaign } = await api('/api/admin/wa-campaigns', { method: 'POST', body: { name: $('wName').value, templateName: $('wTpl').value, language: $('wLang').value, params: $('wParams').value.split('\n').map((x) => x.trim()).filter(Boolean), previewText: $('wPrev').value || undefined, segments: sel('wSeg'), participantTypes: sel('wTypes'), schemeId: $('wScheme').value || undefined } });
+      const { campaign } = await api('/api/admin/wa-campaigns', { method: 'POST', body: { name: $('wName').value, templateName: $('wTpl').value.trim(), language: $('wLang').value, params: $('wParams').value.split('\n').map((x) => x.trim()).filter(Boolean), previewText: $('wPrev').value || undefined, segments: sel('wSeg'), participantTypes: sel('wTypes'), schemeId: $('wScheme').value || undefined } });
       const r = await api(`/api/admin/wa-campaigns/${campaign.id}/launch`, { method: 'POST' });
       await api('/api/admin/wa-campaigns/run', { method: 'POST' });
       alert(`${r.queued} recipients · ${r.skipped.optedOut} skipped (sent STOP)`); render();
@@ -711,7 +758,7 @@ views.ai = async () => {
     <div class="row"><div><label><input type="checkbox" id="aiOn" style="width:auto" ${s.aiEnabled ? 'checked' : ''}> AI Channel Manager on</label></div>
       <div><label>Owner / sales head WhatsApp numbers (comma separated)</label><input id="aiNums" value="${esc(s.aiBriefNumbers.join(', '))}" placeholder="919814000101"></div>
       <div><label>Morning plan at (hour, IST)</label><input type="number" id="aiHour" value="${s.aiBriefHour}"></div></div>
-    <div class="row">${[['aiDailyCap', 'Max actions a day'], ['aiMaxTouchesPerWeek', 'Max messages/calls per person a week'], ...(a.bundle?.calls ? [['aiWinbackMinRupees', 'Call quiet dealers who bought at least (₹, 6 months)']] : []), ['aiSlabPushDays', 'Push slabs when scheme ends within (days)']].map(([k, l]) => `<div><label>${l}</label><input type="number" data-ai="${k}" value="${s[k]}"></div>`).join('')}</div>
+    <div class="row">${[['aiDailyCap', 'Max actions a day'], ['aiMaxTouchesPerWeek', 'Max messages/calls per person a week'], ...(a.bundle?.calls ? [['aiWinbackMinRupees', 'Call quiet dealers who bought at least (₹, 6 months)']] : []), ['aiSlabPushDays', 'Push slabs when scheme ends within (days)']].map(([k, l]) => `<div><label>${l}</label><input type="number" data-ai="${k}" value="${s[k] ?? ''}"></div>`).join('')}</div>
     <label style="margin-top:14px">How much it does on its own</label>
     <div class="row">${a.types.map((t) => `<div><label>${esc(t.label)}</label>${lv(t)}</div>`).join('')}</div>
     <p class="muted">Start with "Ask me first". Fraud holds and scheme ideas always need a person.</p>
@@ -730,8 +777,10 @@ views.ai = async () => {
   $('aiSend').onclick = async () => { try { const r = await api('/api/admin/ai/brief', { method: 'POST' }); $('aiErr').textContent = `Sent to ${r.sent} number(s)`; } catch (e) { $('aiErr').textContent = e.message; } };
   $('aiReport').onclick = async () => { const r = await api('/api/admin/ai/report'); alert(r.text.replace(/\*/g, '')); };
   $('aiSave').onclick = async () => {
-    const body = { aiEnabled: $('aiOn').checked, aiBriefHour: Number($('aiHour').value), aiBriefNumbers: $('aiNums').value.split(',').map((x) => x.replace(/\s/g, '')).filter(Boolean), aiAutonomy: {} };
-    document.querySelectorAll('[data-ai]').forEach((i) => { body[i.dataset.ai] = Number(i.value); });
+    // Blank number fields are left out so the server keeps the default (was sending 0 → "Invalid input")
+    const body = { aiEnabled: $('aiOn').checked, aiBriefNumbers: $('aiNums').value.split(',').map((x) => x.replace(/[\s-]/g, '')).filter(Boolean), aiAutonomy: {} };
+    if ($('aiHour').value.trim() !== '') body.aiBriefHour = Number($('aiHour').value);
+    document.querySelectorAll('[data-ai]').forEach((i) => { if (i.value.trim() !== '') body[i.dataset.ai] = Number(i.value); });
     document.querySelectorAll('[data-auto]').forEach((i) => { body.aiAutonomy[i.dataset.auto] = i.value; });
     try { await api('/api/admin/ai/settings', { method: 'PATCH', body }); $('aiSetErr').textContent = 'Saved ✓'; } catch (e) { $('aiSetErr').textContent = e.message; }
   };

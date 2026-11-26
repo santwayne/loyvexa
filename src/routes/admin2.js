@@ -10,6 +10,7 @@ import { parseDocuments } from '../connectors/adapters.js';
 import { ingestDocuments, assignInvoice } from '../services/invoices.js';
 import * as schemes from '../services/schemes.js';
 import { handleInbound } from '../services/bot.js';
+import { checkChannel, listTemplates } from '../services/whatsapp.js';
 import { getTenant } from '../services/tenants.js';
 import { bundleInfo } from '../services/bundle.js';
 
@@ -160,15 +161,19 @@ r.get('/channels/whatsapp', ah(async (req, res) => {
   const { rows: [c] } = await query(`SELECT id, phone_number_id, display_number, config, status, created_at, access_token_enc IS NOT NULL AS has_token FROM tenant_channels WHERE tenant_id=$1 AND channel='WHATSAPP'`, [req.tenantId]);
   res.json({ channel: c || null, webhookUrl: `${config.publicBaseUrl}/api/whatsapp/webhook`, sendMode: config.whatsapp.sendMode, bundle: bundleInfo(await getTenant(req.tenantId)) });
 }));
+// Testing report #2: one click tells why a reply shows in the log but never reaches the phone.
+r.get('/wa-templates', ah(async (req, res) => res.json(await listTemplates(req.tenantId))));
+r.get('/channels/whatsapp/check', ah(async (req, res) => res.json(await checkChannel(req.tenantId))));
 r.put('/channels/whatsapp', adminOnly, ah(async (req, res) => {
   // Bundle rule 4: a bundle client's one WhatsApp number is set up in Regulars Settings.
   if (!bundleInfo(await getTenant(req.tenantId)).whatsappSetupHere) throw forbidden('WhatsApp for this business is set up in Regulars → Settings (one number for all tools).');
   const b = parse(z.object({
     phoneNumberId: z.string().min(5), displayNumber: z.string().optional(), accessToken: z.string().min(20).optional(),
+    wabaId: z.string().regex(/^\d{6,}$/, 'WhatsApp Business Account ID is a number').optional(),
     otpTemplate: z.object({ name: z.string(), language: z.string().optional() }).optional(),
     templates: z.record(z.string(), z.object({ name: z.string(), language: z.string().optional() })).optional(),
   }), req.body);
-  const cfg = { ...(b.otpTemplate ? { otpTemplate: b.otpTemplate } : {}), ...(b.templates ? { templates: b.templates } : {}) };
+  const cfg = { ...(b.wabaId ? { wabaId: b.wabaId } : {}), ...(b.otpTemplate ? { otpTemplate: b.otpTemplate } : {}), ...(b.templates ? { templates: b.templates } : {}) };
   try {
     const { rows: [c] } = await query(`
       INSERT INTO tenant_channels (tenant_id, channel, phone_number_id, display_number, access_token_enc, config)

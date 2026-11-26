@@ -1,8 +1,8 @@
 import { query, tx, pool } from '../../db/pool.js';
 import { config } from '../../config.js';
-import { conflict, notFound } from '../../lib/errors.js';
+import { conflict, notFound, badRequest } from '../../lib/errors.js';
 import { settingsOf, getTenant } from '../tenants.js';
-import { audience } from '../segments.js';
+import { audience, audiencePreview } from '../segments.js';
 import { progressFor } from '../schemes.js';
 import * as ledger from '../ledger.js';
 import { emit } from '../events.js';
@@ -53,9 +53,18 @@ export async function launchCampaign({ tenantId, campaignId }) {
         [tenantId, c.id, p.id, { vars, ...buildScript({ script: c.script, language: c.language, vars }) }]);
       queued++;
     }
-    const status = queued ? 'RUNNING' : 'COMPLETED';
-    const { rows: [u] } = await db.query(`UPDATE call_campaigns SET status=$2, launched_at=now(), completed_at=CASE WHEN $2='COMPLETED' THEN now() END WHERE id=$1 RETURNING *`, [c.id, status]);
-    return { campaign: u, queued, skipped: { dnd, cooldown } };
+    // Testing report #4: 0 calls is not "COMPLETED". Say why and keep it out of the finished list.
+    if (!queued) {
+      const why = !people.length
+        ? (await audiencePreview(db, { tenantId, segments: c.segments, types: c.participant_types, city: c.city, schemeId: c.scheme_id })).reasons.join(' ')
+        : `Everyone matched was skipped: ${dnd} on DND, ${cooldown} already called in the last ${s.callCooldownDays} days.`;
+      const { rows: [u] } = await db.query(`UPDATE call_campaigns SET status='CANCELLED', note=$2, launched_at=now() WHERE id=$1 RETURNING *`, [c.id, `Not started — ${why}`]);
+      return { campaign: u, queued, matched: people.length, skipped: { dnd, cooldown }, reason: why };
+    }
+    const h = istHour();
+    const note = h < s.callHoursStart || h >= s.callHoursEnd ? `Queued — calls start at ${s.callHoursStart}:00 IST (calling hours ${s.callHoursStart}:00–${s.callHoursEnd}:00).` : null;
+    const { rows: [u] } = await db.query(`UPDATE call_campaigns SET status='RUNNING', note=$2, launched_at=now() WHERE id=$1 RETURNING *`, [c.id, note]);
+    return { campaign: u, queued, matched: people.length, skipped: { dnd, cooldown }, note };
   });
 }
 
@@ -77,13 +86,16 @@ export async function dispatchDue({ limit = 20, now = new Date() } = {}) {
         continue;
       }
       const h = istHour(now);
-      if (h < s.callHoursStart || h >= s.callHoursEnd) continue; // outside calling hours: stays queued
+      if (h < s.callHoursStart || h >= s.callHoursEnd) { // outside calling hours: stays queued, but say so
+        await client.query(`UPDATE calls SET summary=$2 WHERE id=$1 AND summary IS DISTINCT FROM $2`, [k.id, `Waiting for calling hours (${s.callHoursStart}:00–${s.callHoursEnd}:00 IST)`]);
+        continue;
+      }
       try {
         const out = await getCallProvider(k.provider).startCall({ callId: k.id, to: k.mobile, language: k.language, firstMessage: k.context.firstMessage, instructions: k.context.instructions, variables: k.context.vars });
-        await client.query(`UPDATE calls SET status='DIALING', provider_call_id=$2, attempted_at=now() WHERE id=$1`, [k.id, out.providerCallId]);
+        await client.query(`UPDATE calls SET status='DIALING', provider_call_id=$2, attempted_at=now(), summary=$3 WHERE id=$1`, [k.id, out.providerCallId, k.provider === 'mock' ? 'Simulated call (CALL_PROVIDER=mock) — WayneRing was not called' : null]);
         if (out.result) results.push({ callId: k.id, ...out.result });
       } catch (e) {
-        await client.query(`UPDATE calls SET status='FAILED', summary=$2, attempted_at=now(), completed_at=now() WHERE id=$1`, [k.id, e.message.slice(0, 300)]);
+        await client.query(`UPDATE calls SET status='FAILED', summary=$2, attempted_at=now(), completed_at=now() WHERE id=$1`, [k.id, `WayneRing error: ${e.message}`.slice(0, 300)]);
       }
       n++;
     }

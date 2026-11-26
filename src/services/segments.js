@@ -60,13 +60,55 @@ export async function recomputeAll(asOf = new Date()) {
 
 /** Shared audience filter for call + WhatsApp campaigns. Returns participant rows. */
 export async function audience(db, { tenantId, segments = [], types = [], city = null, schemeId = null, extraWhere = '' }) {
+  // Testing report #4: never filter on a segment that was never computed (worker not run yet / not running).
+  if (segments.length) {
+    const { rows: [u] } = await db.query(`SELECT count(*)::int AS n FROM participants WHERE tenant_id=$1 AND status='ACTIVE' AND segment IS NULL`, [tenantId]);
+    if (u.n) {
+      const { rows: [t] } = await db.query(`SELECT * FROM tenants WHERE id=$1`, [tenantId]);
+      await recomputeTenant(t);
+    }
+  }
   const params = [tenantId, segments, types];
   let where = `p.tenant_id=$1 AND p.status='ACTIVE' AND (cardinality($2::text[])=0 OR p.segment = ANY($2::text[])) AND (cardinality($3::text[])=0 OR p.type = ANY($3::text[]))`;
-  if (city) { params.push(city); where += ` AND lower(p.city)=lower($${params.length})`; }
+  if (city && city.trim()) { params.push(city.trim()); where += ` AND lower(btrim(p.city))=lower($${params.length})`; }
   if (schemeId) {
     params.push(schemeId);
     where += ` AND EXISTS (SELECT 1 FROM schemes s WHERE s.id=$${params.length} AND (cardinality(s.eligible_types)=0 OR p.type = ANY(s.eligible_types)))`;
   }
   const { rows } = await db.query(`SELECT p.* FROM participants p WHERE ${where} ${extraWhere} ORDER BY p.created_at`, params);
   return rows;
+}
+
+/**
+ * Testing report #4/#5: before launching, show how many people match and — when it's 0 —
+ * which filter knocked everyone out, plus the cities that do exist (catches "Ludhiana" vs "Ludihiana").
+ */
+export async function audiencePreview(db, { tenantId, segments = [], types = [], city = null, schemeId = null }) {
+  const people = await audience(db, { tenantId, segments, types, city, schemeId });
+  const out = { count: people.length, sample: people.slice(0, 5).map((p) => ({ name: p.name, type: p.type, city: p.city, segment: p.segment })) };
+  out.dnd = people.filter((p) => p.dnd).length;
+  if (people.length) return out;
+  const n = async (args) => (await audience(db, { tenantId, ...args })).length;
+  const [all, bySeg, byType, byCity, unscored] = await Promise.all([
+    n({}), segments.length ? n({ segments }) : null, types.length ? n({ types }) : null, city ? n({ city }) : null,
+    db.query(`SELECT count(*)::int AS n FROM participants WHERE tenant_id=$1 AND status='ACTIVE' AND segment IS NULL`, [tenantId]).then((r) => r.rows[0].n),
+  ]);
+  const reasons = [];
+  if (!all) reasons.push('There are no active participants in this brand yet.');
+  if (bySeg === 0) reasons.push(`Nobody is in segment ${segments.join(' / ')}.${unscored ? ` ${unscored} participant(s) have no segment yet — press "Recompute" on the Segments page.` : ''}`);
+  if (byType === 0) reasons.push(`Nobody is of type ${types.join(' / ')}.`);
+  if (byCity === 0) reasons.push(`Nobody has city "${city}".`);
+  if (!reasons.length) reasons.push('Each filter matches someone, but no one matches all of them together.');
+  out.reasons = reasons;
+  if (city) {
+    const { rows } = await db.query(`SELECT city, count(*)::int AS n FROM participants WHERE tenant_id=$1 AND status='ACTIVE' AND city IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 15`, [tenantId]);
+    out.cities = rows;
+  }
+  return out;
+}
+
+/** Known cities of a brand, for the city dropdowns. */
+export async function citiesOf(tenantId) {
+  const { rows } = await query(`SELECT city, count(*)::int AS n FROM participants WHERE tenant_id=$1 AND city IS NOT NULL GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`, [tenantId]);
+  return rows.map((r) => r.city);
 }

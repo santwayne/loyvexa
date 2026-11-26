@@ -53,8 +53,58 @@ async function graphSend(channel, payload) {
     body: JSON.stringify({ messaging_product: 'whatsapp', ...payload }),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error?.message || `WhatsApp API ${res.status}`);
+  if (!res.ok) throw new Error(metaError(json, res.status));
   return json?.messages?.[0]?.id || null;
+}
+
+/** "(#131030) Recipient phone number not in allowed list — add it in Meta → API Setup" instead of a bare 400. */
+const HINTS = {
+  190: 'access token expired or wrong — paste a permanent (System User) token on the WhatsApp page',
+  100: 'phone number ID is wrong, or the token has no access to it',
+  131030: 'app is in development mode: add this number under Meta → WhatsApp → API Setup → "To", or publish the app',
+  131047: 'more than 24 hours since this person last messaged — only an approved template can be sent',
+  131026: 'this number is not on WhatsApp or cannot receive messages',
+  132001: 'template name / language does not exist or is not approved',
+  133010: 'phone number is not registered with Cloud API yet',
+};
+export function metaError(json, httpStatus) {
+  const e = json?.error || {};
+  const code = e.code; const detail = e.error_data?.details;
+  const hint = HINTS[code] || HINTS[e.error_subcode];
+  return [`WhatsApp API ${httpStatus}${code ? ` (#${code})` : ''}: ${e.message || 'request failed'}`, detail, hint && `→ ${hint}`].filter(Boolean).join(' — ');
+}
+
+/**
+ * Connection check for the WhatsApp page (testing report #2): is the token valid, does the
+ * phone number ID belong to it, and is the server actually sending (live) or only saving (mock)?
+ */
+export async function checkChannel(tenantId) {
+  const out = { sendMode: config.whatsapp.sendMode, problems: [] };
+  if (config.whatsapp.sendMode !== 'live') out.problems.push('Server is in MOCK mode: replies are saved in the log but never sent. Set WHATSAPP_SEND_MODE=live on the Loyvexa server and restart.');
+  const { rows: [tenant] } = await query(`SELECT id, hub_business_id FROM tenants WHERE id=$1`, [tenantId]);
+  out.viaRegulars = waViaRegulars(tenant);
+  if (out.viaRegulars) { out.note = 'This brand sends through Loopdesk/Regulars — check the number there.'; }
+  else {
+    const channel = await channelForTenant(tenantId);
+    if (!channel) out.problems.push('No WhatsApp number connected on this page.');
+    else if (!channel.access_token_enc) out.problems.push('No access token saved.');
+    else {
+      try {
+        const token = decrypt(channel.access_token_enc);
+        const res = await fetch(`https://graph.facebook.com/${config.whatsapp.graphVersion}/${channel.phone_number_id}?fields=display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,status`, { headers: { Authorization: `Bearer ${token}` } });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) out.problems.push(metaError(json, res.status));
+        else out.number = json;
+      } catch (e) { out.problems.push(`Could not reach Meta: ${e.message}`); }
+    }
+  }
+  const { rows } = await query(`SELECT status, count(*)::int AS n, max(error) FILTER (WHERE status='FAILED') AS last_error FROM messages WHERE tenant_id=$1 AND direction='OUT' AND created_at > now() - interval '1 day' GROUP BY 1`, [tenantId]);
+  out.last24h = Object.fromEntries(rows.map((r) => [r.status, r.n]));
+  const lastErr = rows.find((r) => r.last_error)?.last_error;
+  if (lastErr) out.problems.push(`Last failed send: ${lastErr}`);
+  if (out.last24h.SENT && !out.last24h.DELIVERED && !out.last24h.READ && !out.viaRegulars) out.problems.push('Messages left the server (SENT) but Meta never reported DELIVERED. Check that the webhook URL below is subscribed to the "messages" field in Meta, and that the recipient is in the allowed list while the app is in development mode.');
+  out.ok = out.problems.length === 0;
+  return out;
 }
 
 async function record({ tenantId, participantId, to, body, payload, status, error, providerMsgId }) {
@@ -137,4 +187,46 @@ export function verifySignature(req) {
   if (!sig) return false;
   const expected = `sha256=${crypto.createHmac('sha256', config.whatsapp.appSecret).update(req.rawBody || '').digest('hex')}`;
   return safeEqual(sig, expected);
+}
+
+/**
+ * Testing report #8: approved WhatsApp templates for the campaign dropdown.
+ *  - Brand with its own number: straight from Meta (needs the WhatsApp Business Account ID).
+ *  - Loopdesk / Regulars brand: asks the hub (GET …/tools/loyvexa/whatsapp/templates, same signed
+ *    token as sending). Until the hub has that endpoint, falls back to the fixed loyvexa_* names Regulars owns.
+ * Returns { source, templates: [{ name, language, category, params, body }], note? }
+ */
+const countParams = (body = '') => new Set((body.match(/{{\s*\d+\s*}}/g) || [])).size;
+export async function listTemplates(tenantId) {
+  const { rows: [tenant] } = await query(`SELECT id, hub_business_id FROM tenants WHERE id=$1`, [tenantId]);
+  if (waViaRegulars(tenant)) {
+    try {
+      const token = jwt.sign({ purpose: 'whatsapp-templates', jti: crypto.randomUUID() }, config.hub.secret,
+        { algorithm: 'HS256', issuer: 'loyvexa', audience: config.hub.issuer, subject: tenant.hub_business_id, expiresIn: '2m' });
+      const res = await fetch(`${config.regulars.apiUrl}/api/hub/tools/loyvexa/whatsapp/templates`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
+      if (res.ok) {
+        const json = await res.json();
+        return { source: 'loopdesk', templates: (json.templates || []).filter((t) => !t.status || t.status === 'APPROVED').map((t) => ({ name: t.name, language: t.language || 'en', category: t.category || null, body: t.body || null, params: t.params ?? countParams(t.body) })) };
+      }
+    } catch { /* fall through */ }
+    const keys = ['otp', 'redemption.paid', 'redemption.failed', 'redemption.rejected', 'scheme.bonus', 'ai.slab', 'ai.mechanic'];
+    return { source: 'loopdesk-default', note: 'Loopdesk did not send its template list, so these are the standard Loyvexa templates in Loopdesk. Check they are approved there.', templates: keys.map((k) => ({ name: regularsTemplateName(k), language: 'en', category: null, body: null, params: null })) };
+  }
+  const channel = await channelForTenant(tenantId);
+  if (!channel?.access_token_enc) return { source: 'none', templates: [], note: 'Connect your WhatsApp number first.' };
+  if (!channel.config?.wabaId) return { source: 'none', templates: [], note: 'Add your WhatsApp Business Account ID on the WhatsApp page to load approved templates.' };
+  const token = decrypt(channel.access_token_enc);
+  const out = [];
+  let url = `https://graph.facebook.com/${config.whatsapp.graphVersion}/${channel.config.wabaId}/message_templates?status=APPROVED&fields=name,language,category,components&limit=200`;
+  for (let page = 0; url && page < 5; page++) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return { source: 'meta', templates: out, note: metaError(json, res.status) };
+    for (const t of json.data || []) {
+      const body = (t.components || []).find((c) => c.type === 'BODY')?.text || '';
+      out.push({ name: t.name, language: t.language, category: t.category, body, params: countParams(body) });
+    }
+    url = json.paging?.next || null;
+  }
+  return { source: 'meta', templates: out };
 }

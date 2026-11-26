@@ -1,7 +1,7 @@
 import { tx } from '../db/pool.js';
 import { extractCode } from '../lib/codes.js';
 import { settingsOf } from './tenants.js';
-import { preScanChecks, afterInvalidScan, flag } from './fraud.js';
+import { preScanChecks, afterInvalidScan, afterDuplicateSelf, flag } from './fraud.js';
 import * as ledger from './ledger.js';
 import { emit } from './events.js';
 import { applyScanMultiplier } from './schemes.js';
@@ -61,6 +61,7 @@ export async function scan({ tenant, participantId, input, lat = null, lng = nul
       // Re-scanning your own code (camera fires twice) is harmless — don't count it towards lockout.
       if (qr.scanned_by === participantId) {
         await record('DUPLICATE_SELF');
+        await afterDuplicateSelf(db, { tenant, settings, participant, code });
         return { ok: false, result: 'ALREADY_SCANNED', message: 'You already earned points for this code.' };
       }
       if (qr.scanned_by && qr.scanned_by !== participantId) {
