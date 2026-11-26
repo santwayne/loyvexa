@@ -3,7 +3,7 @@ import { config } from '../../config.js';
 import { conflict, notFound, badRequest } from '../../lib/errors.js';
 import { settingsOf, getTenant } from '../tenants.js';
 import { audience, audiencePreview } from '../segments.js';
-import { progressFor } from '../schemes.js';
+import { progressFor, progressLine } from '../schemes.js';
 import * as ledger from '../ledger.js';
 import { emit } from '../events.js';
 import { buildScript } from './scripts.js';
@@ -14,13 +14,11 @@ export const OUTCOMES = ['INTERESTED', 'NOT_INTERESTED', 'NO_ANSWER', 'WRONG_NUM
 
 const istHour = (d = new Date()) => new Date(d.getTime() + 5.5 * 3600e3).getUTCHours();
 
+// Testing report 2 #4: was "Flow Test Scheme — 0, agle slab ke liye 1 aur" (no unit, no reward).
 function schemeLine(schemes, lang) {
   const s = schemes.find((x) => x.type !== 'SCAN_MULTIPLIER' && x.progress) || schemes[0];
   if (!s) return lang === 'en' ? 'no live scheme right now' : 'abhi koi scheme live nahi';
-  if (s.type === 'SCAN_MULTIPLIER') return `${s.name}: ${s.multiplier}x points`;
-  const p = s.progress; const unit = s.metric === 'AMOUNT' ? '₹' : '';
-  const next = p.nextSlab ? (lang === 'en' ? `, ${unit}${p.remainingToNext.toLocaleString('en-IN')} more to the next slab` : `, agle slab ke liye ${unit}${p.remainingToNext.toLocaleString('en-IN')} aur`) : '';
-  return `${s.name} — ${unit}${p.value.toLocaleString('en-IN')}${next}`;
+  return progressLine(s, lang);
 }
 
 export async function createCampaign({ tenantId, adminId, body }) {
@@ -92,7 +90,7 @@ export async function dispatchDue({ limit = 20, now = new Date() } = {}) {
       }
       try {
         const out = await getCallProvider(k.provider).startCall({ callId: k.id, to: k.mobile, language: k.language, firstMessage: k.context.firstMessage, instructions: k.context.instructions, variables: k.context.vars });
-        await client.query(`UPDATE calls SET status='DIALING', provider_call_id=$2, attempted_at=now(), summary=$3 WHERE id=$1`, [k.id, out.providerCallId, k.provider === 'mock' ? 'Simulated call (CALL_PROVIDER=mock) — WayneRing was not called' : null]);
+        await client.query(`UPDATE calls SET status='DIALING', provider_call_id=$2, attempted_at=now(), summary=$3, test_mode=$4 WHERE id=$1`, [k.id, out.providerCallId, k.provider === 'mock' ? 'TEST MODE — WayneRing was not called (CALL_PROVIDER=mock)' : null, k.provider === 'mock']);
         if (out.result) results.push({ callId: k.id, ...out.result });
       } catch (e) {
         await client.query(`UPDATE calls SET status='FAILED', summary=$2, attempted_at=now(), completed_at=now() WHERE id=$1`, [k.id, `WayneRing error: ${e.message}`.slice(0, 300)]);
@@ -109,12 +107,17 @@ export async function dispatchDue({ limit = 20, now = new Date() } = {}) {
 }
 
 /** Outcome from provider (sync or webhook). Idempotent. Calls never change points. */
-export async function settleCall({ callId, providerCallId, outcome, summary, failed }) {
+export async function settleCall({ callId, providerCallId, outcome, summary, failed, testMode }) {
   return tx(async (db) => {
     const { rows: [k] } = await db.query(
       `SELECT * FROM calls WHERE ${callId ? 'id=$1' : 'provider_call_id=$1'} FOR UPDATE`, [callId || providerCallId]);
     if (!k) throw notFound('Call');
     if (['COMPLETED', 'FAILED'].includes(k.status)) return k;
+    // Test mode with no outcome: nobody was called, so no outcome, no DND, no event.
+    if ((testMode || k.test_mode) && !outcome) {
+      const { rows: [u] } = await db.query(`UPDATE calls SET status='COMPLETED', outcome=NULL, summary=$2, test_mode=true, completed_at=now() WHERE id=$1 RETURNING *`, [k.id, summary || 'TEST MODE — no real call was placed']);
+      return u;
+    }
     const oc = OUTCOMES.includes(outcome) ? outcome : 'NO_ANSWER';
     const { rows: [u] } = await db.query(
       `UPDATE calls SET status=$2, outcome=$3, summary=$4, completed_at=now() WHERE id=$1 RETURNING *`, [k.id, failed ? 'FAILED' : 'COMPLETED', failed ? null : oc, summary || null]);
@@ -124,16 +127,26 @@ export async function settleCall({ callId, providerCallId, outcome, summary, fai
   });
 }
 
+// Testing report 2 #5: if every call failed the campaign is FAILED (with the first reason), not COMPLETED.
 export async function completeFinishedCampaigns() {
-  await query(`UPDATE call_campaigns c SET status='COMPLETED', completed_at=now()
+  await query(`UPDATE call_campaigns c SET
+                  status = CASE WHEN EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='FAILED')
+                                 AND NOT EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='COMPLETED') THEN 'FAILED' ELSE 'COMPLETED' END,
+                  note = CASE WHEN EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='FAILED')
+                                 AND NOT EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='COMPLETED')
+                              THEN 'All calls failed: ' || coalesce((SELECT k.summary FROM calls k WHERE k.campaign_id=c.id AND k.status='FAILED' AND k.summary IS NOT NULL LIMIT 1), 'see the calls list')
+                              WHEN EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.test_mode) THEN 'TEST MODE — no real calls were placed (CALL_PROVIDER=mock)'
+                              ELSE c.note END,
+                  completed_at=now()
                 WHERE status='RUNNING' AND NOT EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status IN ('QUEUED','DIALING'))`);
 }
 
 export async function campaignStats(campaignId) {
-  const { rows } = await query(`SELECT status, outcome, count(*)::int AS n FROM calls WHERE campaign_id=$1 GROUP BY 1,2`, [campaignId]);
-  const s = { total: 0, queued: 0, dialing: 0, completed: 0, failed: 0, outcomes: {} };
+  const { rows } = await query(`SELECT status, outcome, test_mode, count(*)::int AS n FROM calls WHERE campaign_id=$1 GROUP BY 1,2,3`, [campaignId]);
+  const s = { total: 0, queued: 0, dialing: 0, completed: 0, failed: 0, test: 0, outcomes: {} };
   for (const r of rows) {
     s.total += r.n; s[r.status.toLowerCase()] = (s[r.status.toLowerCase()] || 0) + r.n;
+    if (r.test_mode) s.test += r.n;
     if (r.outcome) s.outcomes[r.outcome] = (s.outcomes[r.outcome] || 0) + r.n;
   }
   return s;

@@ -2,7 +2,7 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { normalizeMobile, extractCode } from '../lib/codes.js';
 import { settingsOf } from './tenants.js';
-import { sendText } from './whatsapp.js';
+import { sendText, syncOptIn } from './whatsapp.js';
 import { scan } from './scan.js';
 import { progressFor } from './schemes.js';
 import * as ledger from './ledger.js';
@@ -93,7 +93,7 @@ export const appLink = (tenant) => `${config.publicBaseUrl}/app/?brand=${tenant.
 function intent(text) {
   const t = String(text || '').trim().toLowerCase();
   if (/^(stop|unsubscribe|band karo)$/.test(t)) return 'STOP';
-  if (/^(start|subscribe)$/.test(t)) return 'START';
+  if (/^(start|subscribe|unstop|chalu karo)$/.test(t)) return 'START';
   if (/^(english|eng)$/.test(t)) return 'LANG_EN';
   if (/^(4|order|orders|ऑर्डर|catalog|catalogue)$/.test(t)) return 'ORDER';
   if (/^(hindi|hinglish|हिंदी)$/.test(t)) return 'LANG_HI';
@@ -160,11 +160,19 @@ export async function handleInbound({ channel, from, text, providerMsgId }) {
   const l = () => L[lang];
   if (p.status !== 'ACTIVE') return reply(l().blocked);
 
-  const it = intent(text);
+  let it = intent(text);
+  // "YES" turns offers back on only for someone who sent STOP (otherwise YES confirms a cart).
+  if (p.wa_opt_out && /^(yes|haan|ha)$/i.test(String(text).trim())) it = 'START';
   const mayOrder = orders.canOrder(tenant, p);
   const menu = () => l().menu(p.name, tenant.name, appLink(tenant), mayOrder);
-  if (it === 'STOP') { await query(`UPDATE participants SET wa_opt_out=true WHERE id=$1`, [p.id]); return reply(l().stop); }
-  if (it === 'START') { await query(`UPDATE participants SET wa_opt_out=false WHERE id=$1`, [p.id]); return reply(l().start); }
+  // Testing report 2 #1: opt back in everywhere (Loyvexa + Loopdesk's STOP list) first, THEN reply.
+  if (it === 'STOP') { await query(`UPDATE participants SET wa_opt_out=true WHERE id=$1`, [p.id]); await syncOptIn(tenant.id, mobile, false); return reply(l().stop); }
+  if (it === 'START') {
+    await query(`UPDATE participants SET wa_opt_out=false WHERE id=$1`, [p.id]);
+    const sync = await syncOptIn(tenant.id, mobile, true);
+    if (!sync.ok) console.warn(`[wa] START for ${mobile}: Loopdesk opt-in failed — ${sync.error}`);
+    return reply(l().start);
+  }
 
   // Ordering: "order" shows the catalog; while a cart is open, "<item> <qty>", cart, confirm, cancel
   if (it === 'ORDER') {

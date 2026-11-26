@@ -10,12 +10,18 @@ import { safeEqual } from '../../lib/crypto.js';
  */
 const OUTCOMES = ['INTERESTED', 'INTERESTED', 'INTERESTED', 'INTERESTED', 'NOT_INTERESTED', 'NOT_INTERESTED', 'NO_ANSWER', 'NO_ANSWER', 'CALL_LATER', 'WRONG_NUMBER'];
 
-// Deterministic mock: outcome from the number's last digit, so tests and demos are repeatable.
+// Mock = TEST MODE: nothing is dialled. Testing report 2 #3: it used to invent an outcome
+// ("Mock call: wrong number") that looked like a real call. Now it records no outcome, unless
+// CALL_MOCK_OUTCOMES=1 (automated tests only), which picks one from the number's last digit.
 const mock = {
   name: 'mock',
   async startCall({ callId, to }) {
+    const providerCallId = `MOCKCALL-${callId}`;
+    if (process.env.CALL_MOCK_OUTCOMES !== '1') {
+      return { providerCallId, result: { testMode: true, outcome: null, summary: 'TEST MODE — no real call was placed (CALL_PROVIDER=mock on the server)' } };
+    }
     const outcome = OUTCOMES[Number(String(to).slice(-1)) || 0];
-    return { providerCallId: `MOCKCALL-${callId}`, result: { outcome, summary: `Mock call: ${outcome.toLowerCase().replace('_', ' ')}` } };
+    return { providerCallId, result: { testMode: true, outcome, summary: `TEST MODE — simulated outcome: ${outcome.toLowerCase().replace('_', ' ')}` } };
   },
   parseWebhook(req) {
     const b = req.body || {};

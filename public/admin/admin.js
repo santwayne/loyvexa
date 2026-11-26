@@ -255,21 +255,94 @@ async function printQrSheet(batch, from, to, errEl) {
 
 // ---------- participants ----------
 let pQuery = ''; let pSeg = '';
+// Simple CSV reader for the import (quoted fields, commas inside quotes).
+function parseCsvText(text) {
+  const rows = []; let row = []; let f = ''; let q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"' && text[i + 1] === '"') { f += '"'; i++; } else if (ch === '"') q = false; else f += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',') { row.push(f); f = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
+    else f += ch;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  return rows.filter((r) => r.some((c) => c.trim()));
+}
+const P_COLS = { name: ['name', 'dealer name', 'party name'], mobile: ['mobile', 'phone', 'mobile number', 'whatsapp'], type: ['type', 'participant type'], city: ['city', 'town'], state: ['state'], pincode: ['pincode', 'pin'], upiId: ['upi', 'upi id', 'upiid'], externalRef: ['code', 'party code', 'external ref', 'externalref', 'ledger'] };
 views.participants = async () => {
-  const { participants, total } = await api(`/api/admin/participants?limit=200&q=${encodeURIComponent(pQuery)}&segment=${pSeg}`);
+  const [{ participants, total }, { cities }] = await Promise.all([
+    api(`/api/admin/participants?limit=200&q=${encodeURIComponent(pQuery)}&segment=${pSeg}`),
+    api('/api/admin/cities').catch(() => ({ cities: [] })),
+  ]);
   $('main').innerHTML = `<h2>Participants <span class="muted" style="font-size:14px">(${num(total)})</span></h2>
+  <div class="panel"><div class="row" style="align-items:center"><h3 style="margin:0;flex:1">Add dealers / mechanics</h3>
+      <button class="sm" id="pShowAdd">+ Add one</button> <button class="sm" id="pShowCsv">Import CSV</button> <button class="sm" id="pTplCsv">Download CSV format</button></div>
+    <div id="pAdd" class="hidden" style="margin-top:12px"><div class="row">
+      <div><label>Name</label><input id="paName" placeholder="Gill Auto Store"></div>
+      <div><label>Mobile</label><input id="paMobile" placeholder="9814000101" inputmode="numeric"></div>
+      <div><label>Type</label><select id="paType">${PT.map((t) => `<option ${t === 'DEALER' ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div><label>City</label><select id="paCity"><option value="">—</option>${cities.map((c) => `<option>${esc(c)}</option>`).join('')}<option value="__other">Other…</option></select><input id="paCityOther" class="hidden" placeholder="Type the city" style="margin-top:6px"></div>
+      <div><label>Party code (optional)</label><input id="paRef" placeholder="CUST-17"></div>
+      <div style="flex:0;align-self:flex-end"><button class="p" id="paSave">Add</button></div></div><div class="err" id="paErr"></div></div>
+    <div id="pCsv" class="hidden" style="margin-top:12px"><p class="muted">CSV columns: <code>name, mobile, type, city</code> (optional: <code>state, pincode, upi, code</code>). Type is DEALER, RETAILER, MECHANIC… (blank = DEALER). Existing mobiles are skipped.</p>
+      <input type="file" id="pCsvFile" accept=".csv,.txt"><div id="pCsvOut" style="margin-top:10px"></div></div></div>
   <div class="panel"><div class="row"><div><input id="pq" placeholder="Search name, mobile, city" value="${esc(pQuery)}"></div><div style="flex:0;min-width:180px"><select id="pseg"><option value="">All segments</option>${['NEW', 'REGULAR', 'HIGH_SPENDER', 'AT_RISK', 'DORMANT'].map((x) => `<option ${x === pSeg ? 'selected' : ''}>${x}</option>`).join('')}</select></div><div style="flex:0"><button id="pqBtn">Search</button></div></div></div>
   <div class="panel"><table><tr><th>Name</th><th>Type</th><th>Segment</th><th>Mobile</th><th>City</th><th class="num">Balance</th><th class="num">Lifetime</th><th>Last scan</th><th>Status</th><th></th></tr>
-  ${participants.map((p) => `<tr><td>${esc(p.name || '—')}${p.dnd ? ' <span class="muted">· DND</span>' : ''}${p.wa_opt_out ? ' <span class="muted">· STOP</span>' : ''}</td><td>${esc(p.type)}</td><td>${p.segment ? `<span class="seg ${p.segment}">${p.segment.replace('_', ' ')}</span>` : '—'}</td><td>${esc(p.mobile)}</td><td>${esc(p.city || '—')}</td>
+  ${participants.map((p) => `<tr><td>${esc(p.name || '—')}${p.dnd ? ' <span class="muted">· DND</span>' : ''}${p.wa_opt_out ? ' <span class="pill bad" title="Sent STOP on WhatsApp — gets no offers / campaigns">STOP</span>' : ''}</td><td>${esc(p.type)}</td><td>${p.segment ? `<span class="seg ${p.segment}">${p.segment.replace('_', ' ')}</span>` : '—'}</td><td>${esc(p.mobile)}</td><td>${esc(p.city || '—')}</td>
     <td class="num">${num(p.balance)}</td><td class="num">${num(p.lifetime_earned)}</td><td>${dt(p.last_scan_at)}</td>
     <td>${p.status === 'ACTIVE' ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Blocked</span>'}</td>
-    <td><button class="sm ${p.status === 'ACTIVE' ? 'danger' : ''}" data-block="${p.id}" data-status="${p.status}">${p.status === 'ACTIVE' ? 'Block' : 'Unblock'}</button>
-        <button class="sm" data-adj="${p.id}">± Points</button></td></tr>`).join('')}</table></div>`;
+    <td style="white-space:nowrap"><button class="sm ${p.status === 'ACTIVE' ? 'danger' : ''}" data-block="${p.id}" data-status="${p.status}">${p.status === 'ACTIVE' ? 'Block' : 'Unblock'}</button>
+        <button class="sm" data-adj="${p.id}">± Points</button>
+        ${p.wa_opt_out ? `<button class="sm" data-waun="${p.id}" title="Clears STOP here and on the Loopdesk WhatsApp number">Unblock WhatsApp</button>` : ''}</td></tr>`).join('')}</table></div>`;
+  $('pShowAdd').onclick = () => { $('pAdd').classList.toggle('hidden'); $('pCsv').classList.add('hidden'); };
+  $('pShowCsv').onclick = () => { $('pCsv').classList.toggle('hidden'); $('pAdd').classList.add('hidden'); };
+  $('pTplCsv').onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['name,mobile,type,city,code\nGill Auto Store,9814000101,DEALER,Ludhiana,CUST-17\nRaju Mechanic,9814000102,MECHANIC,Ludhiana,\n'], { type: 'text/csv' }));
+    a.download = 'participants-format.csv'; a.click();
+  };
+  $('paCity').onchange = () => $('paCityOther').classList.toggle('hidden', $('paCity').value !== '__other');
+  $('paSave').onclick = async () => {
+    $('paErr').textContent = '';
+    const city = $('paCity').value === '__other' ? $('paCityOther').value.trim() : $('paCity').value;
+    try {
+      const { participant } = await api('/api/admin/participants', { method: 'POST', body: { name: $('paName').value.trim(), mobile: $('paMobile').value.trim(), type: $('paType').value, ...(city ? { city } : {}), ...($('paRef').value.trim() ? { externalRef: $('paRef').value.trim() } : {}) } });
+      alert(`Added ${participant.name} (${participant.mobile})${participant.city ? ` · ${participant.city}` : ''}`); render();
+    } catch (e) { $('paErr').textContent = e.message; }
+  };
+  $('pCsvFile').onchange = async () => {
+    const f = $('pCsvFile').files[0]; if (!f) return;
+    const out = $('pCsvOut');
+    const rows = parseCsvText(await f.text());
+    if (rows.length < 2) { out.innerHTML = '<div class="err">The file has no data rows (first row must be the column names).</div>'; return; }
+    const head = rows[0].map((h) => h.trim().toLowerCase());
+    const idx = Object.fromEntries(Object.entries(P_COLS).map(([k, names]) => [k, head.findIndex((h) => names.includes(h))]));
+    if (idx.mobile < 0 || idx.name < 0) { out.innerHTML = `<div class="err">Need at least <b>name</b> and <b>mobile</b> columns. Found: ${esc(head.join(', '))}</div>`; return; }
+    const body = rows.slice(1).map((r) => Object.fromEntries(Object.entries(idx).filter(([, i]) => i >= 0).map(([k, i]) => [k, (r[i] || '').trim()])));
+    out.innerHTML = `<span class="muted">Importing ${body.length} rows…</span>`;
+    try {
+      const r = await api('/api/admin/participants/import', { method: 'POST', body: { rows: body } });
+      out.innerHTML = `<div class="panel" style="border-left:4px solid ${r.errors.length ? '#b45309' : '#15803d'};margin:0"><b>${r.total} rows read · ${r.created} added · ${r.duplicates} already registered · ${r.errors.length} with errors</b>
+        ${r.errors.length ? `<table style="margin-top:8px"><tr><th>Row</th><th>Mobile</th><th>Problem</th></tr>${r.errors.slice(0, 50).map((e) => `<tr><td>${e.row}</td><td>${esc(e.mobile)}</td><td>${esc(e.error)}</td></tr>`).join('')}</table>` : ''}
+        <p style="margin:8px 0 0"><button class="sm" id="pCsvDone">Refresh list</button></p></div>`;
+      $('pCsvDone').onclick = () => render();
+    } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+    $('pCsvFile').value = '';
+  };
   $('pqBtn').onclick = () => { pQuery = $('pq').value; pSeg = $('pseg').value; render(); };
   $('pseg').onchange = () => $('pqBtn').click();
   $('pq').addEventListener('keydown', (e) => e.key === 'Enter' && $('pqBtn').click());
   document.querySelectorAll('[data-block]').forEach((b) => b.onclick = async () => {
     await api(`/api/admin/participants/${b.dataset.block}`, { method: 'PATCH', body: { status: b.dataset.status === 'ACTIVE' ? 'BLOCKED' : 'ACTIVE', clearScanBlock: true } }); render();
+  });
+  document.querySelectorAll('[data-waun]').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const r = await api(`/api/admin/participants/${b.dataset.waun}/whatsapp-unblock`, { method: 'POST' });
+      alert(r.loopdesk?.ok ? 'WhatsApp unblocked — offers and campaign messages will reach this person again.' : `Unblocked in Loyvexa, but Loopdesk did not confirm: ${r.loopdesk?.error}. Replies may still fail until Loopdesk clears its STOP list.`);
+    } catch (e) { alert(e.message); }
+    render();
   });
   document.querySelectorAll('[data-adj]').forEach((b) => b.onclick = async () => {
     const pts = Number(prompt('Points to add (use minus to deduct):')); if (!pts) return;
@@ -309,12 +382,20 @@ const RULES = {
   VERIFY_RATE_LIMIT: 'Too many code checks from one phone / network in a minute',
   REPEATED_DUPLICATE_SCANS: 'Kept re-scanning a code he already claimed',
 };
+// Testing report 2 #9: readable details instead of raw JSON.
+const DETAIL_LABELS = { key: null, backfilled: null, firstScannedBy: null, code: 'Code', lastCode: 'Code', timesChecked: 'Times checked', lastIp: 'Last IP', ip: 'IP', limit: 'Daily limit', limitPerMinute: 'Limit per minute', scans: 'Scans', windowSeconds: 'Within (seconds)', deviceId: 'Phone ID', accountsOnDevice: 'Accounts on this phone', duplicatesLastHour: 'Repeat scans in the last hour', invalidLastHour: 'Invalid scans in the last hour', blockedUntil: 'Scanning paused until' };
+const fraudDetails = (d) => {
+  const items = Object.entries(d || {}).filter(([k, v]) => DETAIL_LABELS[k] !== null && v !== null && v !== '' && v !== undefined);
+  if (!items.length) return '—';
+  const fmt = (k, v) => (Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? Object.entries(v).map(([a, b]) => `${a}: ${b}`).join(', ') : /until|At$/.test(k) && !Number.isNaN(Date.parse(v)) ? dt(v) : String(v));
+  return `<ul class="kv">${items.map(([k, v]) => `<li><b>${esc(DETAIL_LABELS[k] || k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()))}:</b> ${esc(fmt(k, v))}</li>`).join('')}</ul>`;
+};
 views.fraud = async () => {
   const { flags } = await api('/api/admin/fraud-flags');
-  $('main').innerHTML = `<h2>Fraud flags</h2><div class="panel">${flags.length ? `<table><tr><th>When</th><th>Participant</th><th>Rule</th><th>Details</th><th></th></tr>
+  $('main').innerHTML = `<h2>Fraud flags</h2><div class="panel">${flags.length ? `<table style="min-width:900px"><tr><th>When</th><th>Participant</th><th style="min-width:220px">Rule</th><th>Details</th><th></th></tr>
   ${flags.map((f) => `<tr><td>${dt(f.created_at)}</td><td>${f.participant_id ? `${esc(f.participant_name || '—')}<div class="muted">${esc(f.mobile || '')} · ${esc(f.participant_type || '')}</div>` : `<span class="muted">Public check</span><div class="muted">${esc(f.details?.code ? `Code ${f.details.code}` : f.details?.ip ? `IP ${f.details.ip}` : '')}</div>`}</td>
-    <td><b>${esc(f.rule)}</b><div class="muted">${esc(RULES[f.rule] || '')}</div></td><td class="muted">${esc(JSON.stringify(f.details))}</td>
-    <td><button class="sm" data-res="${f.id}">Resolve</button> ${f.participant_id ? `<button class="sm danger" data-blk="${f.participant_id}">Block user</button>` : ''}</td></tr>`).join('')}</table>` : '<p class="muted">No open flags 🎉</p>'}</div>`;
+    <td><b style="white-space:nowrap">${esc(f.rule.replace(/_/g, ' '))}</b><div class="muted">${esc(RULES[f.rule] || '')}</div></td><td>${fraudDetails(f.details)}</td>
+    <td style="white-space:nowrap"><button class="sm" data-res="${f.id}">Resolve</button> ${f.participant_id ? `<button class="sm danger" data-blk="${f.participant_id}">Block user</button>` : ''}</td></tr>`).join('')}</table>` : '<p class="muted">No open flags 🎉</p>'}</div>`;
   document.querySelectorAll('[data-res]').forEach((b) => b.onclick = async () => { await api(`/api/admin/fraud-flags/${b.dataset.res}/resolve`, { method: 'POST' }); render(); });
   document.querySelectorAll('[data-blk]').forEach((b) => b.onclick = async () => { if (!confirm('Block this participant?')) return; await api(`/api/admin/participants/${b.dataset.blk}`, { method: 'PATCH', body: { status: 'BLOCKED' } }); render(); });
 };
@@ -477,7 +558,7 @@ views.connectors = async () => {
   ${connectors.map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(CTYPES[c.type])}</td><td><code>${esc(c.keyPrefix)}…</code></td><td class="num">${num(c.documents)}</td><td class="num">${num(c.unmatched)}</td>
     <td>${dt(c.lastReceivedAt)}</td><td>${c.status === 'ACTIVE' ? '<span class="pill ok">Active</span>' : '<span class="pill">Disabled</span>'}</td>
     <td style="white-space:nowrap"><button class="sm" data-up="${c.id}" data-type="${c.type}">Upload file</button> <button class="sm" data-rot="${c.id}">New key</button> <button class="sm ${c.status === 'ACTIVE' ? 'danger' : ''}" data-tog="${c.id}" data-st="${c.status}">${c.status === 'ACTIVE' ? 'Disable' : 'Enable'}</button></td></tr>`).join('')}</table>
-    <input type="file" id="upFile" class="hidden" accept=".csv,.xml,.json,.txt"></div>
+    <input type="file" id="upFile" class="hidden" accept=".csv,.xml,.json,.txt"><div id="upOut" style="margin-top:12px"></div></div>
   <div class="panel"><h3>How to send data</h3>
     <p>Header on every request: <code>X-Api-Key: lvx_…</code></p>
     <table><tr><td>Invoices &amp; returns</td><td><code>POST ${esc(endpoints.invoices)}</code></td></tr><tr><td>Dealer master</td><td><code>POST ${esc(endpoints.parties)}</code></td></tr>
@@ -502,13 +583,21 @@ views.connectors = async () => {
   document.querySelectorAll('[data-tog]').forEach((b) => b.onclick = async () => { await api(`/api/admin/connectors/${b.dataset.tog}`, { method: 'PATCH', body: { status: b.dataset.st === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' } }); render(); });
   let upId = null;
   document.querySelectorAll('[data-up]').forEach((b) => b.onclick = () => { upId = b.dataset.up; $('upFile').click(); });
+  // Testing report 2 #12: the result stays on the page (rows read, documents added, errors).
   $('upFile').onchange = async () => {
     const f = $('upFile').files[0]; if (!f) return;
+    const out = $('upOut');
+    out.innerHTML = `<span class="muted">Uploading ${esc(f.name)} (${Math.ceil(f.size / 1024)} KB)…</span>`;
+    out.scrollIntoView({ behavior: 'smooth', block: 'center' });
     try {
       const r = await api(`/api/admin/connectors/${upId}/upload`, { method: 'POST', body: { content: await f.text() } });
-      alert(`${r.received} documents: ${r.created} new, ${r.duplicates} already had, ${r.processed} matched, ${r.unmatched} need mapping.\nPoints: +${r.pointsAwarded} / −${r.pointsReversed}`);
-    } catch (e) { alert(e.message); }
-    $('upFile').value = ''; render();
+      out.innerHTML = `<div class="panel" style="border-left:4px solid ${r.unmatched ? '#b45309' : '#15803d'};margin:0"><b>✓ ${esc(f.name)} uploaded</b> (${esc(r.format || '')})
+        <ul class="kv" style="margin-top:6px">${r.rows != null ? `<li><b>Rows read:</b> ${num(r.rows)}</li>` : ''}<li><b>Invoices / returns found:</b> ${num(r.received)}</li><li><b>New:</b> ${num(r.created)} · <b>already uploaded before:</b> ${num(r.duplicates)}</li>
+        <li><b>Matched to a dealer:</b> ${num(r.processed)} · <b>need mapping (Invoices page):</b> ${num(r.unmatched)}</li><li><b>Points:</b> +${num(r.pointsAwarded)} / −${num(r.pointsReversed)}</li></ul>
+        <button class="sm" id="upDone">Refresh table</button></div>`;
+      $('upDone').onclick = () => render();
+    } catch (e) { out.innerHTML = `<div class="panel" style="border-left:4px solid #c62828;margin:0"><b>Upload failed:</b> ${esc(e.message)}</div>`; }
+    $('upFile').value = '';
   };
 };
 
@@ -588,21 +677,23 @@ views.segments = async () => {
 
 views.calls = async () => {
   if (!bundle.calls) { $('main').innerHTML = '<h2>AI calls</h2><div class="panel muted">AI calls go out only through WayneRing, and WayneRing is not in your package. Ask Loopdesk to add it.</div>'; return; }
-  const [{ campaigns }, { cities }] = await Promise.all([api('/api/admin/call-campaigns'), api('/api/admin/cities').catch(() => ({ cities: [] }))]);
-  $('main').innerHTML = `<h2>AI calls</h2>
+  const [{ campaigns, testMode }, { cities }] = await Promise.all([api('/api/admin/call-campaigns'), api('/api/admin/cities').catch(() => ({ cities: [] }))]);
+  const callPill = (st) => (st === 'COMPLETED' ? 'ok' : st === 'RUNNING' ? 'warn' : ['CANCELLED', 'FAILED'].includes(st) ? 'bad' : '');
+  $('main').innerHTML = `<h2>AI calls ${testMode ? '<span class="testbadge">TEST MODE</span>' : ''}</h2>
+  ${testMode ? '<div class="panel" style="border-left:4px solid #5b21b6"><b>TEST MODE — calls are NOT reaching phones.</b> The server has <code>CALL_PROVIDER=mock</code>, so WayneRing is never called and no outcome is recorded. To go live set <code>CALL_PROVIDER=waynering</code>, <code>WAYNERING_BASE_URL</code> and <code>WAYNERING_API_KEY</code> in the Loyvexa server\'s <code>.env</code> and restart.</div>' : ''}
   <div class="panel"><h3>New call campaign</h3><p class="muted">Calls go out through WayneRing in Hindi, Punjabi or English, only during calling hours, never to DND numbers, and at most once a week per person. Calls never change points.</p>
     <div class="row"><div><label>Name</label><input id="cName" placeholder="Win back dormant mechanics"></div>
       <div><label>Script</label><select id="cScript"><option value="WINBACK">Win back (why did you stop?)</option><option value="SCHEME_REMINDER">Scheme reminder</option><option value="FEEDBACK">Feedback</option></select></div>
       <div><label>Language</label><select id="cLang"><option value="hi">Hindi</option><option value="pa">Punjabi</option><option value="en">English</option></select></div>
-      <div><label>City (optional)</label><input id="cCity" list="cCityList" autocomplete="off"><datalist id="cCityList">${cities.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div></div>
+      <div><label>City (optional)</label><select id="cCity"><option value="">Any city</option>${cities.map((c) => `<option>${esc(c)}</option>`).join('')}</select></div></div>
     <div class="row"><div><label>Segments</label>${multi('cSeg', SEGS, 5)}</div><div><label>Types</label>${multi('cTypes', PT, 5)}</div></div>
     <div id="cMatch" class="muted" style="margin-top:10px">Pick filters to see how many people will be called.</div>
     <button class="p" id="cCreate" style="margin-top:12px" disabled>Create &amp; launch</button><div class="err" id="cErr"></div></div>
   <div class="panel"><table><tr><th>Campaign</th><th>Audience</th><th>Status</th><th class="num">Calls</th><th>Outcomes</th><th></th></tr>
   ${campaigns.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="muted">${esc(c.script.replace('_', ' '))} · ${esc(c.language)}</div></td>
     <td class="muted">${esc([c.segments.join(', '), c.participant_types.join(', '), c.city].filter(Boolean).join(' · ') || 'Everyone')}</td>
-    <td><span class="pill ${c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : c.status === 'CANCELLED' ? 'bad' : ''}">${c.status === 'CANCELLED' && c.note?.startsWith('Not started') ? 'NOT STARTED' : c.status}</span>${c.note ? `<div class="muted" style="max-width:260px">${esc(c.note)}</div>` : ''}</td>
-    <td class="num">${num(c.stats.completed)} / ${num(c.stats.total)}</td>
+    <td>${c.stats.test ? '<span class="testbadge">TEST MODE</span> ' : ''}<span class="pill ${callPill(c.status)}">${c.status === 'CANCELLED' && c.note?.startsWith('Not started') ? 'NOT STARTED' : c.status}</span>${c.note ? `<div class="muted" style="max-width:260px">${esc(c.note)}</div>` : ''}</td>
+    <td class="num">${num(c.stats.completed)} / ${num(c.stats.total)}${c.stats.failed ? `<div class="muted" style="color:#c62828">${num(c.stats.failed)} failed</div>` : ''}</td>
     <td class="muted">${esc(Object.entries(c.stats.outcomes).map(([k, v]) => `${k.replace('_', ' ').toLowerCase()} ${v}`).join(' · ') || '—')}</td>
     <td><button class="sm" data-calls="${c.id}">Calls</button> ${['DRAFT', 'RUNNING'].includes(c.status) ? `<button class="sm danger" data-ccancel="${c.id}">Cancel</button>` : ''}</td></tr>`).join('')}</table></div><div id="callBox"></div>`;
   // Testing report #5: live "X people match" count; launch stays off at 0.
@@ -634,7 +725,7 @@ views.calls = async () => {
   document.querySelectorAll('[data-calls]').forEach((b) => b.onclick = async () => {
     const { calls } = await api(`/api/admin/call-campaigns/${b.dataset.calls}/calls`);
     $('callBox').innerHTML = `<div class="panel"><h3>Calls</h3><table><tr><th>Who</th><th>Segment</th><th>Status</th><th>Outcome</th><th>Summary</th></tr>
-      ${calls.map((k) => `<tr><td>${esc(k.name || '—')}<div class="muted">${esc(k.mobile)} · ${esc(k.city || '')}</div></td><td>${segPill(k.segment)}</td><td>${esc(k.status)}</td><td>${k.outcome ? `<span class="pill ${k.outcome === 'INTERESTED' ? 'ok' : ['WRONG_NUMBER', 'DO_NOT_CALL'].includes(k.outcome) ? 'bad' : ''}">${esc(k.outcome.replace('_', ' '))}</span>` : '—'}</td><td class="muted">${esc(k.summary || '')}</td></tr>`).join('')}</table>
+      ${calls.map((k) => `<tr><td>${esc(k.name || '—')}<div class="muted">${esc(k.mobile)} · ${esc(k.city || '')}</div></td><td>${segPill(k.segment)}</td><td>${k.test_mode ? '<span class="testbadge">TEST MODE</span>' : `<span class="pill ${k.status === 'FAILED' ? 'bad' : k.status === 'COMPLETED' ? 'ok' : ''}">${esc(k.status)}</span>`}</td><td>${k.outcome ? `<span class="pill ${k.outcome === 'INTERESTED' ? 'ok' : ['WRONG_NUMBER', 'DO_NOT_CALL'].includes(k.outcome) ? 'bad' : ''}">${esc(k.outcome.replace('_', ' '))}</span>` : '—'}</td><td class="muted">${esc(k.summary || '')}</td></tr>`).join('')}</table>
       ${calls[0] ? `<p class="muted" style="margin-top:12px">Opening line: “${esc(calls[0].first_message)}”</p>` : ''}</div>`;
     $('callBox').scrollIntoView({ behavior: 'smooth' });
   });
@@ -658,40 +749,56 @@ views.orders = async () => {
 };
 
 views.campaigns = async () => {
-  const [{ campaigns }, { schemes }, tpl] = await Promise.all([api('/api/admin/wa-campaigns'), api('/api/admin/schemes'), api('/api/admin/wa-templates').catch((e) => ({ templates: [], note: e.message }))]);
+  const [{ campaigns }, { schemes }, tpl, wa] = await Promise.all([api('/api/admin/wa-campaigns'), api('/api/admin/schemes'), api('/api/admin/wa-templates').catch((e) => ({ templates: [], note: e.message })), api('/api/admin/channels/whatsapp').catch(() => ({}))]);
+  // Testing report 2 #6: only templates Meta / Loopdesk reports as APPROVED can be picked (no free-typed names when live).
+  const live = wa.sendMode === 'live';
+  const canPick = tpl.templates.length > 0;
+  const statusPill = (c) => (c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : ['CANCELLED', 'FAILED'].includes(c.status) ? 'bad' : '');
   $('main').innerHTML = `<h2>WhatsApp campaigns</h2>
   <div class="panel"><h3>New campaign</h3><p class="muted">${bundle.whatsappSetupHere ? 'Uses a template approved in Meta Business Manager.' : 'You choose who gets it here; it goes out from your Loopdesk WhatsApp number with a template approved there.'} People who sent STOP are never included. Placeholders: <code>{name}</code> <code>{balance}</code> <code>{brand}</code> <code>{scheme_progress}</code> <code>{app_link}</code></p>
-    <div class="row"><div><label>Name</label><input id="wName" placeholder="Diwali scheme launch"></div><div><label>Approved template</label><select id="wTplSel">${tpl.templates.map((t, i) => `<option value="${i}">${esc(t.name)} · ${esc(t.language)}${t.category ? ` · ${esc(t.category.toLowerCase())}` : ''}</option>`).join('')}<option value="other">Other — type the name…</option></select>
-        <input id="wTpl" class="${tpl.templates.length ? 'hidden' : ''}" placeholder="scheme_launch_v1" style="margin-top:6px"></div><div><label>Language code</label><input id="wLang" value="hi"></div></div>
-    ${tpl.note ? `<p class="muted">${esc(tpl.note)}</p>` : ''}<div id="wTplBody" class="muted" style="white-space:pre-wrap"></div>
+    <div class="row"><div><label>Name</label><input id="wName" placeholder="Diwali scheme launch"></div><div><label>Approved template</label>
+        ${canPick ? `<select id="wTplSel">${tpl.templates.map((t, i) => `<option value="${i}">${esc(t.name)} · ${esc(t.language)}${t.category ? ` · ${esc(t.category.toLowerCase())}` : ''}</option>`).join('')}${live ? '' : '<option value="other">Other (test mode only) — type the name…</option>'}</select>`
+          : '<select id="wTplSel" disabled><option>No approved templates yet</option></select>'}
+        <input id="wTpl" class="${canPick || live ? 'hidden' : ''}" placeholder="scheme_launch_v1 (test mode)" style="margin-top:6px"></div><div><label>Language code</label><input id="wLang" value="hi" ${live ? 'readonly' : ''}></div></div>
+    ${tpl.note ? `<p class="muted" style="color:${canPick ? '' : '#b45309'}">${esc(tpl.note)}</p>` : ''}<div id="wTplBody" class="muted" style="white-space:pre-wrap"></div>
     <div class="row"><div><label>Template body params, one per line ({{1}}, {{2}}…)</label><textarea id="wParams" rows="3">{name}\n{scheme_progress}</textarea></div><div><label>Preview text (shown in the message log)</label><textarea id="wPrev" rows="3">Namaste {name}! {scheme_progress}</textarea></div></div>
     <div class="row"><div><label>Segments</label>${multi('wSeg', SEGS, 5)}</div><div><label>Types</label>${multi('wTypes', PT, 5)}</div>
       <div><label>Only people in scheme</label><select id="wScheme"><option value="">—</option>${schemes.filter((x) => x.status === 'ACTIVE').map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></div></div>
-    <button class="p" id="wCreate" style="margin-top:12px">Create &amp; send</button><div class="err" id="wErr"></div></div>
+    <button class="p" id="wCreate" style="margin-top:12px" ${live && !canPick ? 'disabled title="Get a template approved first"' : ''}>Create &amp; send</button><div class="err" id="wErr"></div></div>
   <div class="panel"><table><tr><th>Campaign</th><th>Template</th><th>Status</th><th class="num">Queued</th><th class="num">Sent</th><th class="num">Delivered</th><th class="num">Read</th><th class="num">Failed</th><th></th></tr>
   ${campaigns.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="muted">${esc([c.segments.join(', '), c.participant_types.join(', ')].filter(Boolean).join(' · ') || 'Everyone')}</div></td><td><code>${esc(c.template_name)}</code></td>
-    <td><span class="pill ${c.status === 'COMPLETED' ? 'ok' : c.status === 'RUNNING' ? 'warn' : c.status === 'CANCELLED' ? 'bad' : ''}">${c.status === 'CANCELLED' && c.note?.startsWith('Not started') ? 'NOT STARTED' : c.status}</span>${c.note ? `<div class="muted" style="max-width:260px">${esc(c.note)}</div>` : ''}</td>
+    <td><span class="pill ${statusPill(c)}">${c.status === 'CANCELLED' && c.note?.startsWith('Not started') ? 'NOT STARTED' : c.status}</span>${c.note ? `<div class="muted" style="max-width:300px">${esc(c.note)}</div>` : ''}</td>
     ${['QUEUED', 'SENT', 'DELIVERED', 'READ', 'FAILED'].map((k) => `<td class="num">${num(c.stats[k] || 0)}</td>`).join('')}
-    <td>${['DRAFT', 'RUNNING'].includes(c.status) ? `<button class="sm danger" data-wcancel="${c.id}">Stop</button>` : ''}</td></tr>`).join('')}</table></div>`;
-  // Testing report #8: pick an approved template instead of typing its name
+    <td style="white-space:nowrap"><button class="sm" data-wrec="${c.id}">Who / why</button> ${['DRAFT', 'RUNNING'].includes(c.status) ? `<button class="sm danger" data-wcancel="${c.id}">Stop</button>` : ''}</td></tr>`).join('')}</table></div><div id="wRecBox"></div>`;
   const pickTpl = () => {
+    if (!canPick) return;
     const v = $('wTplSel').value;
     $('wTpl').classList.toggle('hidden', v !== 'other');
-    if (v === 'other') { $('wTplBody').textContent = ''; return; }
+    if (v === 'other') { $('wTplBody').textContent = ''; $('wTpl').value = ''; return; }
     const t = tpl.templates[Number(v)]; if (!t) return;
     $('wTpl').value = t.name; $('wLang').value = t.language || 'en';
     $('wTplBody').textContent = t.body ? `Template text: ${t.body}${t.params ? `\n→ needs ${t.params} param line(s) below` : ''}` : '';
   };
-  $('wTplSel').onchange = pickTpl; pickTpl();
+  if (canPick) { $('wTplSel').onchange = pickTpl; pickTpl(); }
   $('wCreate').onclick = async () => {
+    $('wErr').textContent = '';
     try {
       const { campaign } = await api('/api/admin/wa-campaigns', { method: 'POST', body: { name: $('wName').value, templateName: $('wTpl').value.trim(), language: $('wLang').value, params: $('wParams').value.split('\n').map((x) => x.trim()).filter(Boolean), previewText: $('wPrev').value || undefined, segments: sel('wSeg'), participantTypes: sel('wTypes'), schemeId: $('wScheme').value || undefined } });
       const r = await api(`/api/admin/wa-campaigns/${campaign.id}/launch`, { method: 'POST' });
       await api('/api/admin/wa-campaigns/run', { method: 'POST' });
-      alert(`${r.queued} recipients · ${r.skipped.optedOut} skipped (sent STOP)`); render();
+      alert(r.queued ? `${r.queued} recipients · ${r.skipped.optedOut} skipped (sent STOP)` : `Campaign not started.\n${r.campaign?.note || ''}`); render();
     } catch (e) { $('wErr').textContent = e.message; }
   };
   document.querySelectorAll('[data-wcancel]').forEach((b) => b.onclick = async () => { await api(`/api/admin/wa-campaigns/${b.dataset.wcancel}/cancel`, { method: 'POST' }); render(); });
+  // Testing report 2 #5: every recipient with status and the reason it failed.
+  document.querySelectorAll('[data-wrec]').forEach((b) => b.onclick = async () => {
+    const { recipients } = await api(`/api/admin/wa-campaigns/${b.dataset.wrec}/recipients`);
+    $('wRecBox').innerHTML = `<div class="panel"><h3>Recipients</h3>${recipients.length ? `<table><tr><th>Who</th><th>Status</th><th>Reason</th><th>When</th></tr>
+      ${recipients.map((x) => `<tr><td>${esc(x.name || '—')}<div class="muted">${esc(x.mobile)} · ${esc(x.type)}${x.city ? ` · ${esc(x.city)}` : ''}</div></td>
+        <td><span class="pill ${x.status === 'FAILED' ? 'bad' : ['DELIVERED', 'READ'].includes(x.status) ? 'ok' : x.status === 'SENT' ? 'warn' : ''}">${esc(x.status)}</span></td>
+        <td class="muted" style="max-width:480px">${esc(x.error || (x.status === 'SKIPPED' ? 'Sent STOP or blocked' : ''))}</td><td>${dt(x.updated_at)}</td></tr>`).join('')}</table>` : '<p class="muted">Nobody was in this campaign.</p>'}</div>`;
+    $('wRecBox').scrollIntoView({ behavior: 'smooth' });
+  });
 };
 
 
@@ -734,6 +841,10 @@ views.ai = async () => {
       ${x.status === 'PROPOSED' ? `<div class="acts"><button class="p sm" data-ok="${x.id}">${x.type === 'WINBACK_CALL' ? 'Approve call' : x.type === 'SCHEME_IDEA' ? 'Create draft' : x.type === 'FRAUD_REVIEW' ? 'Block & hold' : 'Approve'}</button>
         ${x.payload?.message ? `<button class="sm" data-edit="${x.id}">Edit text</button>` : ''}<button class="sm" data-skip="${x.id}">Skip</button><span class="muted" id="r-${x.id}"></span></div>` : ''}
     </div>`;
+  // Testing report 2 #8: show only values the brand set; blank boxes show "Default: N" as the placeholder.
+  const custom = new Set(a.custom || []);
+  const aiDef = (k) => num(a.defaults?.[k] ?? s[k]);
+  const aiVal = (k) => (custom.has(k) && s[k] != null ? s[k] : '');
   const lv = (t) => `<select data-auto="${t.type}">${['SUGGEST', 'APPROVE', 'AUTO'].filter((l) => !(l === 'AUTO' && ['FRAUD_REVIEW', 'SCHEME_IDEA'].includes(t.type))).map((l) => `<option value="${l}" ${s.aiAutonomy[t.type] === l ? 'selected' : ''}>${AI_LEVEL[l]}</option>`).join('')}</select>`;
   $('main').innerHTML = `<h2>AI Channel Manager</h2>
   <p class="muted" style="margin-top:-8px;max-width:760px">Every morning it reads purchases, scans, schemes and fraud flags, picks the loyalty actions most likely to bring in sales (scheme slab push, mechanic nudge, fraud hold, scheme idea${a.bundle?.calls ? ', win-back AI call' : ''}), and asks you on WhatsApp before it contacts anyone. Reorder and payment reminders are sent from Loopdesk. ${s.aiEnabled ? '<b>It is on.</b>' : '<b>It is off</b> — switch it on in the settings below.'}</p>
@@ -757,8 +868,9 @@ views.ai = async () => {
   <div class="panel"><h3>Settings</h3>
     <div class="row"><div><label><input type="checkbox" id="aiOn" style="width:auto" ${s.aiEnabled ? 'checked' : ''}> AI Channel Manager on</label></div>
       <div><label>Owner / sales head WhatsApp numbers (comma separated)</label><input id="aiNums" value="${esc(s.aiBriefNumbers.join(', '))}" placeholder="919814000101"></div>
-      <div><label>Morning plan at (hour, IST)</label><input type="number" id="aiHour" value="${s.aiBriefHour}"></div></div>
-    <div class="row">${[['aiDailyCap', 'Max actions a day'], ['aiMaxTouchesPerWeek', 'Max messages/calls per person a week'], ...(a.bundle?.calls ? [['aiWinbackMinRupees', 'Call quiet dealers who bought at least (₹, 6 months)']] : []), ['aiSlabPushDays', 'Push slabs when scheme ends within (days)']].map(([k, l]) => `<div><label>${l}</label><input type="number" data-ai="${k}" value="${s[k] ?? ''}"></div>`).join('')}</div>
+      <div><label>Morning plan at (hour, IST)</label><input type="number" id="aiHour" value="${aiVal('aiBriefHour')}" placeholder="Default: ${aiDef('aiBriefHour')}"></div></div>
+    <div class="row">${[['aiDailyCap', 'Max actions a day'], ['aiMaxTouchesPerWeek', 'Max messages/calls per person a week'], ...(a.bundle?.calls ? [['aiWinbackMinRupees', 'Call quiet dealers who bought at least (₹, 6 months)']] : []), ['aiSlabPushDays', 'Push slabs when scheme ends within (days)']].map(([k, l]) => `<div><label>${l}</label><input type="number" data-ai="${k}" value="${aiVal(k)}" placeholder="Default: ${aiDef(k)}"></div>`).join('')}</div>
+    <p class="muted" style="margin-top:4px">Leave a box empty to use the default shown in it.</p>
     <label style="margin-top:14px">How much it does on its own</label>
     <div class="row">${a.types.map((t) => `<div><label>${esc(t.label)}</label>${lv(t)}</div>`).join('')}</div>
     <p class="muted">Start with "Ask me first". Fraud holds and scheme ideas always need a person.</p>
@@ -773,14 +885,25 @@ views.ai = async () => {
   document.querySelectorAll('[data-ok]').forEach((b) => b.onclick = () => decideBtn(b.dataset.ok, 'approve', $(`t-${b.dataset.ok}`)?.value));
   document.querySelectorAll('[data-skip]').forEach((b) => b.onclick = () => decideBtn(b.dataset.skip, 'skip'));
   document.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => { const m = $(`m-${b.dataset.edit}`); m.outerHTML = `<textarea id="t-${b.dataset.edit}" maxlength="1000">${esc(m.textContent)}</textarea>`; b.remove(); });
-  $('aiPlan').onclick = async () => { try { const r = await api('/api/admin/ai/plan', { method: 'POST' }); $('aiErr').textContent = `Planned ${r.planned} new · ${r.waiting} waiting`; setTimeout(render, 700); } catch (e) { $('aiErr').textContent = e.message; } };
+  // Testing report 2 #7: no auto-refresh; when nothing is planned, say why.
+  $('aiPlan').onclick = async () => {
+    const btn = $('aiPlan'); btn.disabled = true; $('aiErr').innerHTML = '<span class="muted">Planning…</span>';
+    try {
+      const r = await api('/api/admin/ai/plan', { method: 'POST' });
+      const why = (r.reasons || []).map((x) => `<li>${esc(x)}</li>`).join('');
+      $('aiErr').innerHTML = `<div class="panel" style="margin:10px 0 0;border-left:4px solid ${r.planned ? '#15803d' : '#b45309'};color:inherit"><b>${r.planned ? `Planned ${r.planned} new action(s) · ${r.waiting} waiting for approval` : `No new actions planned · ${r.waiting} waiting for approval`}</b>
+        ${why ? `<ul style="margin:6px 0 0;padding-left:18px">${why}</ul>` : ''}${r.planned ? '<p style="margin:8px 0 0"><button class="sm p" id="aiShow">Show the plan</button></p>' : ''}</div>`;
+      if ($('aiShow')) $('aiShow').onclick = () => render();
+    } catch (e) { $('aiErr').textContent = e.message; }
+    btn.disabled = false;
+  };
   $('aiSend').onclick = async () => { try { const r = await api('/api/admin/ai/brief', { method: 'POST' }); $('aiErr').textContent = `Sent to ${r.sent} number(s)`; } catch (e) { $('aiErr').textContent = e.message; } };
   $('aiReport').onclick = async () => { const r = await api('/api/admin/ai/report'); alert(r.text.replace(/\*/g, '')); };
   $('aiSave').onclick = async () => {
     // Blank number fields are left out so the server keeps the default (was sending 0 → "Invalid input")
-    const body = { aiEnabled: $('aiOn').checked, aiBriefNumbers: $('aiNums').value.split(',').map((x) => x.replace(/[\s-]/g, '')).filter(Boolean), aiAutonomy: {} };
-    if ($('aiHour').value.trim() !== '') body.aiBriefHour = Number($('aiHour').value);
-    document.querySelectorAll('[data-ai]').forEach((i) => { if (i.value.trim() !== '') body[i.dataset.ai] = Number(i.value); });
+    const body = { aiEnabled: $('aiOn').checked, aiBriefNumbers: $('aiNums').value.split(',').map((x) => x.replace(/[\s-]/g, '')).filter(Boolean), aiAutonomy: {}, reset: [] };
+    if ($('aiHour').value.trim() !== '') body.aiBriefHour = Number($('aiHour').value); else body.reset.push('aiBriefHour');
+    document.querySelectorAll('[data-ai]').forEach((i) => { if (i.value.trim() !== '') body[i.dataset.ai] = Number(i.value); else body.reset.push(i.dataset.ai); });
     document.querySelectorAll('[data-auto]').forEach((i) => { body.aiAutonomy[i.dataset.auto] = i.value; });
     try { await api('/api/admin/ai/settings', { method: 'PATCH', body }); $('aiSetErr').textContent = 'Saved ✓'; } catch (e) { $('aiSetErr').textContent = e.message; }
   };

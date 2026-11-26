@@ -159,6 +159,29 @@ export async function applyScanMultiplier(db, { tenantId, participant, qr, baseP
   return { schemeId: s.id, name: s.name, bonus, multiplier: Number(s.multiplier) };
 }
 
+/**
+ * One line about a scheme for call scripts and campaign messages, with units and rewards
+ * (testing report 2 #4: was "Flow Test Scheme — 0, agle slab ke liye 1 aur").
+ *   hi: "Flow Test Scheme: abhi 0 scans. Agla slab 1 scan pe (500 points) — sirf 1 scan aur"
+ */
+export function progressLine(s, lang = 'hi') {
+  const en = lang === 'en';
+  if (s.type === 'SCAN_MULTIPLIER') return en ? `${s.name}: ${s.multiplier}x points on every scan` : `${s.name}: har scan pe ${s.multiplier}x points`;
+  const p = s.progress;
+  if (!p) return s.name;
+  const n = (v) => Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const qty = (v) => (s.metric === 'AMOUNT' ? `₹${n(v)}`
+    : s.metric === 'SCANS' ? `${n(v)} ${Number(v) === 1 ? 'scan' : 'scans'}` : `${n(v)} ${Number(v) === 1 ? 'unit' : 'units'}`);
+  const reward = (sl) => (sl.rewardType === 'PERCENT' ? `${sl.value}% bonus` : sl.rewardType === 'PER_UNIT' ? `${sl.value} points per ${s.metric === 'SCANS' ? 'scan' : 'unit'}` : `${n(sl.value)} points`);
+  const parts = [en ? `${s.name}: ${qty(p.value)} so far` : `${s.name}: abhi ${qty(p.value)}`];
+  if (p.slab) parts.push(en ? `slab ${p.slab.label || reward(p.slab)} reached (${n(p.points)} points)` : `slab ${p.slab.label || reward(p.slab)} mil gaya (${n(p.points)} points)`);
+  if (p.nextSlab) {
+    parts.push(en ? `next slab at ${qty(p.nextSlab.min)} (${reward(p.nextSlab)}) — only ${qty(p.remainingToNext)} more`
+      : `agla slab ${qty(p.nextSlab.min)} pe (${reward(p.nextSlab)}) — sirf ${qty(p.remainingToNext)} aur`);
+  } else if (p.slab) parts.push(en ? 'top slab reached' : 'sabse upar wala slab mil gaya');
+  return parts.map((x, i) => (i ? x[0].toUpperCase() + x.slice(1) : x)).join('. ');
+}
+
 /** Active schemes this participant can take part in, with live progress. */
 export async function progressFor({ tenant, participant }) {
   const settings = settingsOf(tenant);

@@ -4,6 +4,7 @@ import { query } from '../db/pool.js';
 import { config } from '../config.js';
 import { decrypt, safeEqual } from '../lib/crypto.js';
 import { waViaRegulars } from './bundle.js';
+import { badRequest } from '../lib/errors.js';
 
 /**
  * WhatsApp Cloud API sender. One number per brand (tenant_channels).
@@ -138,6 +139,31 @@ async function regularsSend(tenant, to, payload) {
   } finally { clearTimeout(timer); }
 }
 
+/**
+ * Testing report 2 #1: after START the reply still FAILED with "This person sent STOP", because
+ * Regulars keeps its own STOP list for the shared number and Loyvexa only cleared its own flag.
+ * Now Loyvexa tells Regulars too, BEFORE replying:
+ *   POST {REGULARS_API_URL}/api/hub/tools/loyvexa/whatsapp/opt-in   (same signed token, purpose "whatsapp-opt-in")
+ *   body { to: "9198…", optIn: true | false }  →  { ok: true }
+ * Returns { ok, skipped?, error? } and never throws (a missing endpoint must not break the bot).
+ */
+export async function syncOptIn(tenantId, to, optIn) {
+  const { rows: [tenant] } = await query(`SELECT id, hub_business_id FROM tenants WHERE id=$1`, [tenantId]);
+  if (!waViaRegulars(tenant)) return { ok: true, skipped: 'own number' };
+  if (config.whatsapp.sendMode !== 'live') return { ok: true, skipped: 'mock mode' };
+  try {
+    const token = jwt.sign({ purpose: 'whatsapp-opt-in', jti: crypto.randomUUID() }, config.hub.secret,
+      { algorithm: 'HS256', issuer: 'loyvexa', audience: config.hub.issuer, subject: tenant.hub_business_id, expiresIn: '2m' });
+    const res = await fetch(`${config.regulars.apiUrl}/api/hub/tools/loyvexa/whatsapp/opt-in`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, optIn: !!optIn }), signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) return { ok: true };
+    const json = await res.json().catch(() => ({}));
+    return { ok: false, error: res.status === 404 ? 'Loopdesk does not have the opt-in endpoint yet (POST /api/hub/tools/loyvexa/whatsapp/opt-in)' : (json?.error?.message || json?.error || `Loopdesk ${res.status}`) };
+  } catch (e) { return { ok: false, error: `Could not reach Loopdesk: ${e.message}` }; }
+}
+
 async function send({ tenantId, participantId, to, body, payload }) {
   const { rows: [tenant] } = await query(`SELECT id, hub_business_id FROM tenants WHERE id=$1`, [tenantId]);
   if (waViaRegulars(tenant)) {
@@ -206,11 +232,16 @@ export async function listTemplates(tenantId) {
       const res = await fetch(`${config.regulars.apiUrl}/api/hub/tools/loyvexa/whatsapp/templates`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
       if (res.ok) {
         const json = await res.json();
-        return { source: 'loopdesk', templates: (json.templates || []).filter((t) => !t.status || t.status === 'APPROVED').map((t) => ({ name: t.name, language: t.language || 'en', category: t.category || null, body: t.body || null, params: t.params ?? countParams(t.body) })) };
+        const list = json.templates || [];
+        // If Loopdesk sends a status, keep only APPROVED; if it sends none, its list is approved-only.
+        const hasStatus = list.some((t) => t.status);
+        return { source: 'loopdesk', templates: list.filter((t) => !hasStatus || String(t.status).toUpperCase() === 'APPROVED').map((t) => ({ name: t.name, language: t.language || 'en', category: t.category || null, body: t.body || null, params: t.params ?? countParams(t.body) })) };
       }
     } catch { /* fall through */ }
+    // Testing report 2 #6: these fixed names used to be offered as if approved, and a campaign ran
+    // with loyvexa_scheme_bonus that Meta had not approved. Not verified = not selectable.
     const keys = ['otp', 'redemption.paid', 'redemption.failed', 'redemption.rejected', 'scheme.bonus', 'ai.slab', 'ai.mechanic'];
-    return { source: 'loopdesk-default', note: 'Loopdesk did not send its template list, so these are the standard Loyvexa templates in Loopdesk. Check they are approved there.', templates: keys.map((k) => ({ name: regularsTemplateName(k), language: 'en', category: null, body: null, params: null })) };
+    return { source: 'unverified', templates: [], expected: keys.map((k) => regularsTemplateName(k)), note: `Could not confirm which templates are approved in Loopdesk, so none can be picked yet. Create and get these approved in Loopdesk → WhatsApp templates: ${keys.map((k) => regularsTemplateName(k)).join(', ')}.` };
   }
   const channel = await channelForTenant(tenantId);
   if (!channel?.access_token_enc) return { source: 'none', templates: [], note: 'Connect your WhatsApp number first.' };
@@ -229,4 +260,20 @@ export async function listTemplates(tenantId) {
     url = json.paging?.next || null;
   }
   return { source: 'meta', templates: out };
+}
+
+/**
+ * Testing report 2 #6: a campaign may only use a template Meta / Loopdesk reports as APPROVED.
+ * In mock mode (nothing is really sent) any name is allowed, so the flow can be tested.
+ */
+export async function assertApprovedTemplate(tenantId, name, language) {
+  if (config.whatsapp.sendMode !== 'live') return null;
+  const list = await listTemplates(tenantId);
+  const t = list.templates.find((x) => x.name === name && (!language || !x.language || x.language === language))
+    || list.templates.find((x) => x.name === name);
+  if (!t) {
+    const why = list.note ? ` ${list.note}` : list.templates.length ? ` Approved templates: ${list.templates.map((x) => x.name).join(', ')}.` : '';
+    throw badRequest('TEMPLATE_NOT_APPROVED', `Template "${name}" is not approved on WhatsApp, so the campaign was not created.${why}`);
+  }
+  return t;
 }

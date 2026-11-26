@@ -261,3 +261,11 @@ Outside Meta's 24-hour window business messages need approved templates under `t
 
 ## Not built yet (next)
 Rewards catalog (gifts and vouchers alongside UPI), mechanic KYC (PAN for TDS), Punjabi (Gurmukhi) UI in the PWA.
+
+## Testing report 2 fixes (26 Nov 2026)
+
+Tests: `npm run test:report2` (10 checks; server running with `WHATSAPP_SEND_MODE=mock`, `CALL_PROVIDER=mock`).
+
+- **AI calls reaching phones**: the server must have `CALL_PROVIDER=waynering`, `WAYNERING_BASE_URL`, `WAYNERING_API_KEY` in `.env`. With `CALL_PROVIDER=mock` the console shows a **TEST MODE** badge and records no outcome (set `CALL_MOCK_OUTCOMES=1` only for automated tests).
+- **START after STOP on a Loopdesk number**: Regulars must add `POST /api/hub/tools/loyvexa/whatsapp/opt-in` (see `docs/hub-connection.md` §4); Loyvexa calls it before replying and from the "Unblock WhatsApp" button.
+- **Campaign templates**: only templates reported as APPROVED (Meta, or Loopdesk's template list) can be chosen when `WHATSAPP_SEND_MODE=live`.

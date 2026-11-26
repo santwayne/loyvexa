@@ -13,9 +13,9 @@ import { requestRedemption, isValidUpi } from '../services/redemption.js';
 import { emit } from '../services/events.js';
 import { config } from '../config.js';
 import { progressFor } from '../services/schemes.js';
-import { citiesOf } from '../services/segments.js';
+import { citiesOf, cityFor } from '../services/segments.js';
+import { COMMON_CITIES } from '../lib/cities.js';
 
-const COMMON_CITIES = ['Ludhiana', 'Amritsar', 'Jalandhar', 'Patiala', 'Bathinda', 'Mohali', 'Chandigarh', 'Moga', 'Khanna', 'Phagwara', 'Hoshiarpur', 'Firozpur', 'Barnala', 'Sangrur', 'Pathankot', 'Kapurthala', 'Rajpura', 'Phillaur', 'Ahmedgarh', 'Delhi'];
 
 const r = Router();
 const otpLimiter = rateLimit({ windowMs: 60_000, limit: config.otpRateLimitPerMinute, standardHeaders: true, legacyHeaders: false });
@@ -26,7 +26,9 @@ const publicTenant = (t) => ({ name: t.name, slug: t.slug, brandColor: t.brand_c
 r.get('/:slug/info', ah(async (req, res) => {
   const t = await getTenantBySlug(req.params.slug);
   const s = settingsOf(t);
-  const cities = [...new Set([...(await citiesOf(t.id)), ...COMMON_CITIES])];
+  // Brand's own cities first, then the common list (sorted) — the app shows these in a dropdown.
+  const own = await citiesOf(t.id);
+  const cities = [...new Set([...own, ...COMMON_CITIES.filter((c) => !own.includes(c))])];
   res.json({ brand: publicTenant(t), signupTypes: s.allowSelfSignup ? s.selfSignupTypes : [], pointValuePaise: s.pointValuePaise, minRedeemPoints: s.minRedeemPoints, cities });
 }));
 
@@ -54,7 +56,7 @@ r.post('/:slug/auth/otp/verify', otpLimiter, ah(async (req, res) => {
     const { rows: [p] } = await db.query(
       `INSERT INTO participants (tenant_id, type, name, mobile, city) VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (tenant_id, mobile) DO UPDATE SET mobile=EXCLUDED.mobile RETURNING *`,
-      [t.id, type, b.name || null, mobile, b.city || null]);
+      [t.id, type, b.name || null, mobile, await cityFor(t.id, b.city)]);
     await db.query(`INSERT INTO wallets (participant_id, tenant_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [p.id, t.id]);
     await emit(db, t.id, 'participant.created', { participantId: p.id, type: p.type, source: 'self_signup' });
     return p;
@@ -82,7 +84,7 @@ r.patch('/me', ah(async (req, res) => {
   const { rows: [p] } = await query(
     `UPDATE participants SET name=coalesce($2,name), city=coalesce($3,city), state=coalesce($4,state), pincode=coalesce($5,pincode),
        upi_id=coalesce($6,upi_id), language=coalesce($7,language) WHERE id=$1 RETURNING *`,
-    [req.participant.id, b.name, b.city, b.state, b.pincode, b.upiId, b.language]);
+    [req.participant.id, b.name, b.city ? await cityFor(req.participant.tenant_id, b.city) : undefined, b.state, b.pincode, b.upiId, b.language]);
   res.json({ participant: me(p) });
 }));
 

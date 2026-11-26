@@ -187,13 +187,14 @@ export async function planTenant(tenant, now = new Date()) {
   // Loyalty actions only (bundle rule). Reorder nudges and payment reminders
   // are Regulars' / Korvo's job; win-back calls only with WayneRing.
   const allowed = new Set(actionTypesFor(tenant));
-  const all = [
-    ...(allowed.has('WINBACK_CALL') ? await winbackCandidates(tenant, s, today) : []),
-    ...(await slabCandidates(tenant, s, today, now)),
-    ...(await mechanicCandidates(tenant, s, today)),
-    ...(await fraudCandidates(tenant, s)),
-    ...(await schemeIdea(tenant, s, today, now)),
-  ].filter((c) => allowed.has(c.type)).map((c) => ({ ...c, priority: (c.type === 'FRAUD_REVIEW' ? 3 : 1) * c.expected * rates[c.type] }))
+  const found = {
+    WINBACK_CALL: allowed.has('WINBACK_CALL') ? await winbackCandidates(tenant, s, today) : [],
+    SLAB_PUSH: await slabCandidates(tenant, s, today, now),
+    MECHANIC_NUDGE: await mechanicCandidates(tenant, s, today),
+    FRAUD_REVIEW: await fraudCandidates(tenant, s),
+    SCHEME_IDEA: await schemeIdea(tenant, s, today, now),
+  };
+  const all = Object.values(found).flat().filter((c) => allowed.has(c.type)).map((c) => ({ ...c, priority: (c.type === 'FRAUD_REVIEW' ? 3 : 1) * c.expected * rates[c.type] }))
     .sort((a, b) => b.priority - a.priority);
 
   // Guardrails, in one place.
@@ -201,23 +202,24 @@ export async function planTenant(tenant, now = new Date()) {
   let room = s.aiDailyCap - doneToday;
   const seen = new Set();
   const planned = [];
+  const skipped = { cap: 0, samePerson: 0, inactive: 0, dnd: 0, optOut: 0, openAction: 0, weeklyLimit: 0, alreadyPlanned: 0 };
   for (const c of all) {
-    if (room <= 0) break;
+    if (room <= 0) { skipped.cap++; continue; }
     let p = null;
     if (c.participantId) {
-      if (seen.has(c.participantId)) continue; // one action per person per plan
+      if (seen.has(c.participantId)) { skipped.samePerson++; continue; } // one action per person per plan
       ({ rows: [p] } = await query(`SELECT * FROM participants WHERE id=$1`, [c.participantId]));
-      if (!p || p.status !== 'ACTIVE') continue;
-      if (CHANNEL[c.type] === 'CALL' && p.dnd) continue;
-      if (['SLAB_PUSH', 'MECHANIC_NUDGE'].includes(c.type) && p.wa_opt_out) continue;
+      if (!p || p.status !== 'ACTIVE') { skipped.inactive++; continue; }
+      if (CHANNEL[c.type] === 'CALL' && p.dnd) { skipped.dnd++; continue; }
+      if (['SLAB_PUSH', 'MECHANIC_NUDGE'].includes(c.type) && p.wa_opt_out) { skipped.optOut++; continue; }
       const { rows: [open] } = await query(`SELECT 1 FROM ai_actions WHERE participant_id=$1 AND status IN ('PROPOSED','APPROVED','EXECUTING') LIMIT 1`, [p.id]);
-      if (open) continue;
+      if (open) { skipped.openAction++; continue; }
       if (CHANNEL[c.type] !== 'INTERNAL') {
         const { rows: [{ n }] } = await query(`
           SELECT ((SELECT count(*) FROM ai_actions WHERE participant_id=$1 AND status='DONE' AND executed_at > $2::timestamptz - interval '7 days')
                 + (SELECT count(*) FROM wa_campaign_recipients r JOIN messages m ON m.id=r.message_id WHERE r.participant_id=$1 AND m.created_at > $2::timestamptz - interval '7 days')
                 + (SELECT count(*) FROM calls WHERE participant_id=$1 AND status <> 'SKIPPED' AND created_at > $2::timestamptz - interval '7 days'))::int AS n`, [p.id, now]);
-        if (n >= s.aiMaxTouchesPerWeek) continue;
+        if (n >= s.aiMaxTouchesPerWeek) { skipped.weeklyLimit++; continue; }
       }
       seen.add(p.id);
     }
@@ -229,10 +231,40 @@ export async function planTenant(tenant, now = new Date()) {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (tenant_id, dedupe_key) DO NOTHING RETURNING *`,
     [tenant.id, c.participantId, c.type, autonomy === 'AUTO' ? 'APPROVED' : 'PROPOSED', autonomy, words.title, words.reason,
       JSON.stringify(words.payload), c.expected, c.priority, today, c.dedupe, autonomy === 'AUTO' ? 'auto' : null]);
-    if (a) { planned.push(a); room--; }
+    if (a) { planned.push(a); room--; } else skipped.alreadyPlanned++;
   }
   await query(`INSERT INTO ai_state (tenant_id, last_plan_date) VALUES ($1,$2) ON CONFLICT (tenant_id) DO UPDATE SET last_plan_date=$2, updated_at=now()`, [tenant.id, today]);
+  planned.why = await explain(tenant, s, { allowed, found, skipped, doneToday, now });
   return planned;
+}
+
+/**
+ * Testing report 2 #7: "Plan now" gave 0 plans and no reason. Plain-English reasons, per action type,
+ * for why nothing (more) was planned.
+ */
+async function explain(tenant, s, { allowed, found, skipped, doneToday, now }) {
+  const out = [];
+  if (!s.aiEnabled) out.push('AI Channel Manager is switched off in Settings below (planning still ran so you can see what it would do).');
+  if (s.aiDailyCap - doneToday <= 0) out.push(`Daily limit reached: ${doneToday} actions already planned today (max ${s.aiDailyCap} a day).`);
+  const { rows: [cnt] } = await query(`SELECT count(*)::int AS people, count(*) FILTER (WHERE segment='AT_RISK')::int AS at_risk FROM participants WHERE tenant_id=$1 AND status='ACTIVE'`, [tenant.id]);
+  if (!cnt.people) out.push('No active dealers or mechanics yet — add participants first.');
+  if (!found.SLAB_PUSH.length) {
+    const { rows: [sc] } = await query(`SELECT count(*)::int AS n, count(*) FILTER (WHERE ends_at <= $2::timestamptz + make_interval(days => $3))::int AS ending FROM schemes WHERE tenant_id=$1 AND status='ACTIVE' AND type IN ('PURCHASE_SLAB','SCAN_TARGET') AND starts_at <= $2 AND ends_at > $2`, [tenant.id, now, s.aiSlabPushDays]);
+    out.push(!sc.n ? 'Slab push: no ACTIVE purchase or scan-target scheme is running.'
+      : !sc.ending ? `Slab push: ${sc.n} scheme(s) running, but none ends within ${s.aiSlabPushDays} days (pushes start near the end date).`
+        : `Slab push: nobody is within ${s.aiSlabPushWithinPct}% of their next slab.`);
+  }
+  if (!found.MECHANIC_NUDGE.length) out.push(`Mechanic nudge: no mechanic is AT RISK with past earnings (${cnt.at_risk} at-risk people in total; segments update hourly).`);
+  if (!found.FRAUD_REVIEW.length) out.push('Fraud hold: nobody has 2+ open fraud flags this week with a cash-out waiting.');
+  if (!found.SCHEME_IDEA.length) out.push(new Date(now.getTime() + 5.5 * 3600e3).getUTCDay() !== 1 ? 'Scheme idea: only suggested on Mondays.' : 'Scheme idea: a purchase scheme is already running or planned, or fewer than 5 dealers bought in 90 days.');
+  if (!allowed.has('WINBACK_CALL')) out.push('Win-back call: WayneRing is not in the package.');
+  else if (!found.WINBACK_CALL.length) out.push(`Win-back call: no dealer went quiet ${s.segAtRiskDays}+ days after buying at least ₹${Number(s.aiWinbackMinRupees).toLocaleString('en-IN')} in 6 months.`);
+  const sk = [
+    [skipped.alreadyPlanned, 'already proposed earlier'], [skipped.openAction, 'already have an action waiting'], [skipped.weeklyLimit, `reached ${s.aiMaxTouchesPerWeek} messages/calls this week`],
+    [skipped.optOut, 'sent STOP'], [skipped.dnd, 'are on DND'], [skipped.inactive, 'are blocked'], [skipped.samePerson, 'had another action this plan'], [skipped.cap, 'over the daily limit'],
+  ].filter(([n]) => n).map(([n, t]) => `${n} ${t}`);
+  if (sk.length) out.push(`Found but skipped: ${sk.join(', ')}.`);
+  return out;
 }
 
 export { ACTION_TYPES };

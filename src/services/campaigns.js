@@ -2,7 +2,7 @@ import { query, tx } from '../db/pool.js';
 import { conflict, notFound } from '../lib/errors.js';
 import { settingsOf } from './tenants.js';
 import { audience } from './segments.js';
-import { progressFor } from './schemes.js';
+import { progressFor, progressLine } from './schemes.js';
 import { sendTemplate } from './whatsapp.js';
 import { appLink } from './bot.js';
 import * as ledger from './ledger.js';
@@ -34,7 +34,9 @@ export async function launchWaCampaign({ tenantId, campaignId }) {
       await db.query(`INSERT INTO wa_campaign_recipients (campaign_id, participant_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [c.id, p.id]);
       queued++;
     }
-    const { rows: [u] } = await db.query(`UPDATE wa_campaigns SET status=$2, launched_at=now(), completed_at=CASE WHEN $2='COMPLETED' THEN now() END WHERE id=$1 RETURNING *`, [c.id, queued ? 'RUNNING' : 'COMPLETED']);
+    // Nobody to send to is not "COMPLETED": say why.
+    const note = queued ? null : `Not started — ${people.length ? `all ${people.length} matched people sent STOP` : 'nobody matches these filters'}`;
+    const { rows: [u] } = await db.query(`UPDATE wa_campaigns SET status=$2, note=$3, launched_at=now() WHERE id=$1 RETURNING *`, [c.id, queued ? 'RUNNING' : 'CANCELLED', note]);
     return { campaign: u, queued, skipped: { optedOut } };
   });
 }
@@ -45,8 +47,7 @@ async function varsFor(tenant, p) {
   const w = await ledger.getWallet({ query }, p.id);
   const schemes = await progressFor({ tenant, participant: p });
   const s = schemes.find((x) => x.progress);
-  const unit = s?.metric === 'AMOUNT' ? '₹' : '';
-  const scheme_progress = s ? `${s.name}: ${unit}${s.progress.value.toLocaleString('en-IN')}${s.progress.nextSlab ? `, ${unit}${s.progress.remainingToNext.toLocaleString('en-IN')} to next slab` : ''}` : '';
+  const scheme_progress = s ? progressLine(s, p.language === 'en' ? 'en' : 'hi') : '';
   return { name: p.name || '', brand: tenant.name, balance: w.balance.toLocaleString('en-IN'), scheme_progress, app_link: appLink(tenant) };
 }
 
@@ -68,13 +69,33 @@ export async function sendDue() {
       if (p.wa_opt_out || p.status !== 'ACTIVE') { await query(`UPDATE wa_campaign_recipients SET status='SKIPPED', updated_at=now() WHERE campaign_id=$1 AND participant_id=$2`, [c.id, p.id]); continue; }
       const v = await varsFor(c.tenant, p);
       const m = await sendTemplate({ tenantId: c.tenant_id, participantId: p.id, to: p.mobile, name: c.template_name, language: c.language, params: (c.params || []).map((x) => fill(x, v)), previewText: c.preview_text ? fill(c.preview_text, v) : null });
-      await query(`UPDATE wa_campaign_recipients SET status=$3, message_id=$4, updated_at=now() WHERE campaign_id=$1 AND participant_id=$2`,
-        [c.id, p.id, m.status === 'FAILED' ? 'FAILED' : 'SENT', m.id]);
+      await query(`UPDATE wa_campaign_recipients SET status=$3, message_id=$4, error=$5, updated_at=now() WHERE campaign_id=$1 AND participant_id=$2`,
+        [c.id, p.id, m.status === 'FAILED' ? 'FAILED' : 'SENT', m.id, m.status === 'FAILED' ? m.error : null]);
       sent++;
     }
-    await query(`UPDATE wa_campaigns w SET status='COMPLETED', completed_at=now() WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM wa_campaign_recipients r WHERE r.campaign_id=w.id AND r.status='QUEUED')`, [c.id]);
+    await finishCampaign(c.id);
   }
   return sent;
+}
+
+/**
+ * Testing report 2 #5: "3 Failed, 0 Sent" was shown as COMPLETED. When nothing is left in the
+ * queue: nobody reached → FAILED (with the most common reason); some failed → COMPLETED with a note.
+ * Also re-run when a delivery receipt turns a SENT message into FAILED.
+ */
+export async function finishCampaign(campaignId) {
+  const { rows: [c] } = await query(`SELECT id, status FROM wa_campaigns WHERE id=$1`, [campaignId]);
+  if (!c || !['RUNNING', 'COMPLETED', 'FAILED'].includes(c.status)) return;
+  const { rows } = await query(`SELECT status, count(*)::int AS n FROM wa_campaign_recipients WHERE campaign_id=$1 GROUP BY 1`, [campaignId]);
+  const st = Object.fromEntries(rows.map((r) => [r.status, r.n]));
+  if (st.QUEUED) return;
+  const ok = (st.SENT || 0) + (st.DELIVERED || 0) + (st.READ || 0);
+  const failed = st.FAILED || 0;
+  const { rows: [top] } = failed ? await query(`SELECT error, count(*)::int AS n FROM wa_campaign_recipients WHERE campaign_id=$1 AND status='FAILED' GROUP BY 1 ORDER BY 2 DESC LIMIT 1`, [campaignId]) : { rows: [] };
+  const reason = top?.error || 'no reason given';
+  const status = failed && !ok ? 'FAILED' : 'COMPLETED';
+  const note = !failed ? null : !ok ? `All ${failed} messages failed — ${reason}` : `${failed} of ${failed + ok} failed — most common reason: ${reason}`;
+  await query(`UPDATE wa_campaigns SET status=$2, note=$3, completed_at=coalesce(completed_at, now()) WHERE id=$1`, [campaignId, status, note]);
 }
 
 /** WhatsApp delivery receipts (sent / delivered / read / failed). */
@@ -85,12 +106,23 @@ export async function applyStatus({ providerMsgId, status, error }) {
   const { rows: [m] } = await query(`UPDATE messages SET status=$2, error=coalesce($3,error) WHERE provider_msg_id=$1 AND direction='OUT' RETURNING id`, [providerMsgId, st, error || null]);
   if (m) {
     // never move a receipt backwards (read -> delivered)
-    await query(`UPDATE wa_campaign_recipients SET status=$2, updated_at=now() WHERE message_id=$1
-                  AND array_position(ARRAY['QUEUED','SENT','DELIVERED','READ'], status) < coalesce(array_position(ARRAY['QUEUED','SENT','DELIVERED','READ'], $2), 99)`, [m.id, st]);
+    const { rows: changed } = await query(`UPDATE wa_campaign_recipients SET status=$2, error=CASE WHEN $2='FAILED' THEN coalesce($3, error) ELSE error END, updated_at=now() WHERE message_id=$1
+                  AND array_position(ARRAY['QUEUED','SENT','DELIVERED','READ'], status) < coalesce(array_position(ARRAY['QUEUED','SENT','DELIVERED','READ'], $2), 99)
+                  RETURNING campaign_id`, [m.id, st, error || null]);
+    if (st === 'FAILED') for (const r of changed) await finishCampaign(r.campaign_id);
   }
 }
 
 export async function waCampaignStats(id) {
   const { rows } = await query(`SELECT status, count(*)::int AS n FROM wa_campaign_recipients WHERE campaign_id=$1 GROUP BY 1`, [id]);
   return Object.fromEntries(rows.map((r) => [r.status, r.n]));
+}
+
+/** Who got it, who didn't, and why (testing report 2 #5). */
+export async function waCampaignRecipients(tenantId, campaignId) {
+  const { rows } = await query(`
+    SELECT r.status, r.error, r.updated_at, p.name, p.mobile, p.type, p.city
+      FROM wa_campaign_recipients r JOIN wa_campaigns c ON c.id=r.campaign_id JOIN participants p ON p.id=r.participant_id
+     WHERE r.campaign_id=$1 AND c.tenant_id=$2 ORDER BY (r.status='FAILED') DESC, p.name`, [campaignId, tenantId]);
+  return rows;
 }
