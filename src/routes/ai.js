@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
+import { normalizeMobile } from '../lib/codes.js';
 import { ah, parse, notFound, badRequest, unauthorized, forbidden, conflict } from '../lib/errors.js';
 import { requireAdmin, requireTenantScope, signAdmin } from '../middleware/auth.js';
 import { getTenant, settingsOf } from '../services/tenants.js';
@@ -81,11 +82,13 @@ const LEVEL = z.enum(['SUGGEST', 'APPROVE', 'AUTO']);
 r.patch('/admin/ai/settings', ...adminOnly, ah(async (req, res) => {
   const b = parse(z.object({
     aiEnabled: z.boolean().optional(),
-    aiBriefNumbers: z.array(z.string().regex(/^\+?\d[\d\s-]{8,16}$/)).max(5).optional(),
+    aiBriefNumbers: z.array(z.string().regex(/^\+?\d[\d\s-]{8,16}$/, 'use a 10-digit mobile, e.g. 9814000101')).max(5).optional(),
     aiBriefHour: z.number().int().min(6).max(12).optional(),
     aiContactFromHour: z.number().int().min(8).max(12).optional(),
     aiContactToHour: z.number().int().min(16).max(21).optional(),
-    aiAutonomy: z.record(z.enum(ACTION_TYPES), LEVEL).optional(),
+    // partialRecord: zod v4's z.record(enum) demands EVERY key, but the console only sends the
+    // loyalty actions it shows — that was the "Invalid input" on Save (testing report #3).
+    aiAutonomy: z.partialRecord(z.enum(ACTION_TYPES), LEVEL).optional(),
     aiDailyCap: z.number().int().min(1).max(200).optional(),
     aiMaxTouchesPerWeek: z.number().int().min(1).max(5).optional(),
     aiReorderMinOrders: z.number().int().min(2).max(12).optional(),
@@ -95,6 +98,7 @@ r.patch('/admin/ai/settings', ...adminOnly, ah(async (req, res) => {
     aiOverdueMinRupees: z.number().int().min(0).optional(),
     aiWinbackMinRupees: z.number().int().min(0).optional(),
   }), req.body);
+  if (b.aiBriefNumbers) b.aiBriefNumbers = b.aiBriefNumbers.map((m) => normalizeMobile(m)).filter(Boolean);
   if (b.aiAutonomy) for (const t of ['FRAUD_REVIEW', 'SCHEME_IDEA']) if (b.aiAutonomy[t] === 'AUTO') throw badRequest('NOT_ALLOWED', `${LABEL[t].one} always needs a person to approve`);
   const tenant = await getTenant(req.tenantId);
   const settings = { ...(tenant.settings || {}), ...b, ...(b.aiAutonomy ? { aiAutonomy: { ...(tenant.settings?.aiAutonomy || {}), ...b.aiAutonomy } } : {}) };

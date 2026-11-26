@@ -1,7 +1,7 @@
 {
   "name": "loyvexa-backend",
   "version": "1.0.0",
-  "description": "Loyvexa — channel loyalty platform for manufacturers (QR scan-to-earn, UPI payouts, counterfeit check)",
+  "description": "Loyvexa \u2014 channel loyalty platform for manufacturers (QR scan-to-earn, UPI payouts, counterfeit check)",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
@@ -14,7 +14,8 @@
     "seed:demo2": "node scripts/seed-demo-phase2.js",
     "test:e2e3": "node scripts/e2e-phase3.js",
     "seed:demo3": "node scripts/seed-demo-phase3.js",
-    "test:e2e4": "node scripts/e2e-phase4.js"
+    "test:e2e4": "node scripts/e2e-phase4.js",
+    "test:report": "node scripts/e2e-testing-report.js"
   },
   "license": "ISC",
   "type": "module",

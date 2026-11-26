@@ -16,6 +16,25 @@ export async function flag(db, { tenantId, participantId, rule, details = {} }) 
   return ins.rows[0].id;
 }
 
+/**
+ * Flags that belong to a CODE or a phone (IP), not to a signed-in participant —
+ * raised by the public authenticity page. One open flag per rule + key per day.
+ */
+export async function flagByKey(db, { tenantId, rule, key, details = {} }) {
+  const { rows } = await db.query(
+    `SELECT id FROM fraud_flags WHERE tenant_id=$1 AND participant_id IS NULL AND rule=$2 AND details->>'key' = $3
+       AND status='OPEN' AND created_at > now() - interval '1 day' LIMIT 1`,
+    [tenantId, rule, key],
+  );
+  if (rows[0]) return rows[0].id;
+  const ins = await db.query(
+    `INSERT INTO fraud_flags (tenant_id, participant_id, rule, details) VALUES ($1,NULL,$2,$3) RETURNING id`,
+    [tenantId, rule, { ...details, key }],
+  );
+  await emit(db, tenantId, 'fraud.flagged', { flagId: ins.rows[0].id, participantId: null, rule, details });
+  return ins.rows[0].id;
+}
+
 /** Checks run BEFORE a scan is accepted. Returns { ok, result, message } */
 export async function preScanChecks(db, { tenant, settings, participant, deviceId }) {
   if (participant.status !== 'ACTIVE') return { ok: false, result: 'BLOCKED', message: 'Account blocked. Contact the brand.' };
@@ -54,6 +73,17 @@ export async function preScanChecks(db, { tenant, settings, participant, deviceI
     }
   }
   return { ok: true };
+}
+
+/** Same person re-scanning his own claimed code again and again (camera double-fire is fine, 5+ in an hour is not). */
+export async function afterDuplicateSelf(db, { tenant, settings, participant, code }) {
+  const { rows: [c] } = await db.query(
+    `SELECT count(*) AS n FROM scan_attempts WHERE participant_id=$1 AND result='DUPLICATE_SELF' AND created_at > now() - interval '1 hour'`,
+    [participant.id],
+  );
+  if (Number(c.n) >= Math.max(5, settings.invalidScanLimitPerHour)) {
+    await flag(db, { tenantId: tenant.id, participantId: participant.id, rule: 'REPEATED_DUPLICATE_SCANS', details: { duplicatesLastHour: Number(c.n), lastCode: code } });
+  }
 }
 
 /** After an invalid scan: pause scanning if too many invalid attempts in the last hour. */

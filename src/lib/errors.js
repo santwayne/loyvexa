@@ -19,6 +19,10 @@ export const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)
 /** Parse with a zod schema or throw a 400. */
 export function parse(schema, data) {
   const r = schema.safeParse(data);
-  if (!r.success) throw badRequest('VALIDATION_ERROR', 'Invalid input', r.error.flatten());
+  if (!r.success) {
+    // Say WHICH field is wrong, not just "Invalid input" (testing report #3).
+    const issues = r.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`);
+    throw badRequest('VALIDATION_ERROR', `Invalid input — ${issues.slice(0, 3).join('; ')}`, r.error.flatten());
+  }
   return r.data;
 }

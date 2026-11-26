@@ -67,7 +67,7 @@
         <div id="newFields" class="hidden">
           <label data-t="name"></label><input id="name">
           <label data-t="iam"></label><select id="ptype"></select>
-          <label data-t="city"></label><input id="city">
+          <label data-t="city"></label><input id="city" list="cityList" autocomplete="off">
         </div>
         <p class="muted" id="devOtp"></p>
         <button class="primary" id="verifyOtp" data-t="verify"></button>
@@ -103,7 +103,7 @@
     </div>
     <div id="tProfile" class="card hidden">
       <label data-t="name"></label><input id="pName">
-      <label data-t="city"></label><input id="pCity">
+      <label data-t="city"></label><input id="pCity" list="cityList" autocomplete="off"><datalist id="cityList"></datalist>
       <button class="primary" id="saveProfile" data-t="save"></button>
       <button class="ghost" id="logout" data-t="logout"></button>
       <p class="muted" id="pMobile"></p>

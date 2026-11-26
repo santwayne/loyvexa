@@ -94,6 +94,7 @@ export async function rejectRedemption({ tenantId, redemptionId, adminId, reason
     await ledger.post(db, { tenantId, participantId: r.participant_id, type: 'REDEEM_RELEASE', points: r.points, refType: 'redemption', refId: r.id, note: `Rejected: ${reason || ''}`.trim(), createdBy: adminId, release: true });
     const { rows: [u] } = await db.query(
       `UPDATE redemptions SET status='REJECTED', failure_reason=$2, approved_by=$3, updated_at=now() WHERE id=$1 RETURNING *`, [r.id, reason || 'Rejected', adminId]);
+    await emit(db, tenantId, 'redemption.rejected', { redemptionId: r.id, participantId: r.participant_id, points: r.points, amountPaise: r.amount_paise, reason: reason || null });
     return u;
   });
 }

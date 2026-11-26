@@ -5,7 +5,7 @@ import { ah, parse, notFound, conflict, forbidden } from '../lib/errors.js';
 import { requireAdmin, requireTenantScope } from '../middleware/auth.js';
 import { getTenant } from '../services/tenants.js';
 import { hasWayneRing } from '../services/bundle.js';
-import { recomputeTenant, SEGMENTS } from '../services/segments.js';
+import { recomputeTenant, SEGMENTS, audiencePreview, citiesOf } from '../services/segments.js';
 import * as calls from '../services/calls/index.js';
 import { createWaCampaign, launchWaCampaign, sendDue, waCampaignStats } from '../services/campaigns.js';
 import { pushPlaced } from '../services/orders.js';
@@ -52,6 +52,12 @@ const needsWayneRing = ah(async (req, res, next) => {
   if (!hasWayneRing(await getTenant(req.tenantId))) throw forbidden('AI calls need WayneRing in your package. Ask Loopdesk to add it.');
   next();
 });
+// Testing report #5: "X people match" before launch, with the reason when it is 0.
+r.post('/call-campaigns/preview', adminOnly, ah(async (req, res) => {
+  const b = parse(callBody.pick({ segments: true, participantTypes: true, city: true, schemeId: true }), req.body);
+  res.json(await audiencePreview({ query }, { tenantId: req.tenantId, segments: b.segments || [], types: b.participantTypes || [], city: b.city || null, schemeId: b.schemeId || null }));
+}));
+r.get('/cities', ah(async (req, res) => res.json({ cities: await citiesOf(req.tenantId) })));
 r.post('/call-campaigns', adminOnly, needsWayneRing, ah(async (req, res) => {
   res.status(201).json({ campaign: await calls.createCampaign({ tenantId: req.tenantId, adminId: req.admin.id, body: parse(callBody, req.body) }) });
 }));

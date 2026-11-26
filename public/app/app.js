@@ -6,7 +6,7 @@ const T = {
     yourPoints: 'आपके पॉइंट्स', history: 'हिस्ट्री', redeem: 'पैसे निकालो', profile: 'प्रोफाइल', redeemTitle: 'UPI में पैसे पाओ',
     upi: 'UPI ID', points: 'कितने पॉइंट्स', redeemNow: 'रिक्वेस्ट भेजो', payouts: 'पेमेंट्स', save: 'सेव करो', logout: 'लॉग आउट',
     scan: '📷  स्कैन करो', scanMore: 'और स्कैन करो', home: 'होम', submitCode: 'कोड जमा करो', cancel: 'बंद करो',
-    worth: (r) => `= ₹${r}`, heldTxt: (h) => `${h} पॉइंट्स पेमेंट में`, min: (m, v) => `कम से कम ${m} पॉइंट्स · 1 पॉइंट = ₹${v}`,
+    worth: (r) => `= ₹${r}`, heldTxt: (h, r) => `⏳ पेमेंट बाकी: ₹${r} (${h} पॉइंट्स रोके गए)`, min: (m, v) => `कम से कम ${m} पॉइंट्स · 1 पॉइंट = ₹${v}`,
     empty: 'अभी तक कोई स्कैन नहीं। पहला QR स्कैन करो!', success: 'पॉइंट्स मिल गए!', fail: 'स्कैन नहीं हुआ', sent: 'रिक्वेस्ट भेज दी ✅',
     camErr: 'कैमरा नहीं खुला। नीचे कोड टाइप करो।',
     errs: {
@@ -20,7 +20,7 @@ const T = {
       BLOCKED: 'स्कैनिंग अभी बंद है। ब्रांड से संपर्क करो।',
     },
     types: { MECHANIC: 'मैकेनिक', ELECTRICIAN: 'इलेक्ट्रीशियन', PLUMBER: 'प्लंबर', CONTRACTOR: 'कॉन्ट्रैक्टर', PAINTER: 'पेंटर', CARPENTER: 'कारपेंटर', RETAILER: 'दुकानदार' },
-    st: { REQUESTED: 'मंज़ूरी बाकी', PROCESSING: 'प्रोसेसिंग', PAID: 'पेमेंट हो गया', FAILED: 'फेल (पॉइंट्स वापस)', REJECTED: 'रिजेक्ट (पॉइंट्स वापस)' },
+    st: { REQUESTED: 'पेमेंट बाकी — मंज़ूरी का इंतज़ार', PROCESSING: 'प्रोसेसिंग', PAID: 'पेमेंट हो गया', FAILED: 'फेल (पॉइंट्स वापस)', REJECTED: 'रिजेक्ट (पॉइंट्स वापस)' },
     lt: { EARN_SCAN: 'स्कैन', REDEEM_HOLD: 'पैसे निकाले', REDEEM_RELEASE: 'पॉइंट्स वापस', ADJUST_CREDIT: 'बोनस', ADJUST_DEBIT: 'कटौती', BONUS: 'बोनस', EXPIRE: 'एक्सपायर', PURCHASE_EARN: 'खरीद', PURCHASE_REVERSAL: 'रिटर्न', SCHEME_BONUS: 'स्कीम बोनस' },
     schemes: 'स्कीम्स', noSchemes: 'अभी कोई स्कीम नहीं चल रही।', endsOn: (d) => `आखिरी तारीख: ${d}`, multi: (m) => `हर स्कैन पर ${m}x पॉइंट्स`, slabNow: (l, p) => `✅ ${l} → ${p} पॉइंट्स`, noSlab: 'अभी कोई स्लैब नहीं', toNext: (r, rw) => `अगला स्लैब (${rw}) — सिर्फ ${r} और`, top: '🏆 सबसे ऊपर का स्लैब!',
   },
@@ -30,12 +30,12 @@ const T = {
     yourPoints: 'Your points', history: 'History', redeem: 'Cash out', profile: 'Profile', redeemTitle: 'Get money in UPI',
     upi: 'UPI ID', points: 'Points', redeemNow: 'Send request', payouts: 'Payouts', save: 'Save', logout: 'Log out',
     scan: '📷  Scan', scanMore: 'Scan more', home: 'Home', submitCode: 'Submit code', cancel: 'Close',
-    worth: (r) => `= ₹${r}`, heldTxt: (h) => `${h} points in payout`, min: (m, v) => `Minimum ${m} points · 1 point = ₹${v}`,
+    worth: (r) => `= ₹${r}`, heldTxt: (h, r) => `⏳ Payout pending: ₹${r} (${h} points on hold)`, min: (m, v) => `Minimum ${m} points · 1 point = ₹${v}`,
     empty: 'No scans yet. Scan your first QR!', success: 'Points added!', fail: 'Scan failed', sent: 'Request sent ✅',
     camErr: 'Camera unavailable. Type the code below.',
     errs: {},
     types: { MECHANIC: 'Mechanic', ELECTRICIAN: 'Electrician', PLUMBER: 'Plumber', CONTRACTOR: 'Contractor', PAINTER: 'Painter', CARPENTER: 'Carpenter', RETAILER: 'Retailer' },
-    st: { REQUESTED: 'Awaiting approval', PROCESSING: 'Processing', PAID: 'Paid', FAILED: 'Failed (points returned)', REJECTED: 'Rejected (points returned)' },
+    st: { REQUESTED: 'Payout pending — awaiting approval', PROCESSING: 'Processing', PAID: 'Paid', FAILED: 'Failed (points returned)', REJECTED: 'Rejected (points returned)' },
     lt: { EARN_SCAN: 'Scan', REDEEM_HOLD: 'Cash out', REDEEM_RELEASE: 'Points returned', ADJUST_CREDIT: 'Bonus', ADJUST_DEBIT: 'Deduction', BONUS: 'Bonus', EXPIRE: 'Expired', PURCHASE_EARN: 'Purchase', PURCHASE_REVERSAL: 'Return', SCHEME_BONUS: 'Scheme bonus' },
     schemes: 'Schemes', noSchemes: 'No schemes running right now.', endsOn: (d) => `Ends: ${d}`, multi: (m) => `${m}x points on every scan`, slabNow: (l, p) => `✅ ${l} → ${p} points`, noSlab: 'No slab reached yet', toNext: (r, rw) => `Next slab (${rw}) — only ${r} more`, top: '🏆 Top slab reached!',
   },
@@ -125,7 +125,7 @@ function renderHome() {
   const { wallet, rupeeValue, minRedeemPoints, pointValuePaise, participant } = meData;
   $('balance').textContent = wallet.balance.toLocaleString('en-IN');
   $('rupees').textContent = t('worth')(rupeeValue.toLocaleString('en-IN'));
-  $('held').textContent = wallet.held ? t('heldTxt')(wallet.held) : '';
+  $('held').textContent = wallet.held ? t('heldTxt')(wallet.held, ((wallet.held * pointValuePaise) / 100).toLocaleString('en-IN')) : '';
   $('redeemHint').textContent = t('min')(minRedeemPoints, pointValuePaise / 100);
   $('upi').value = participant.upiId || ''; $('pName').value = participant.name || ''; $('pCity').value = participant.city || '';
   $('pMobile').textContent = `+${participant.mobile}`;
@@ -141,7 +141,7 @@ function renderHome() {
       <div class="bar"><div style="width:${pct}%"></div></div><div>${p.slab ? t('slabNow')(esc(p.slab.label || rw(p.slab)), p.points) : t('noSlab')}</div>
       <div class="muted">${p.nextSlab ? t('toNext')(unit(s, p.remainingToNext), rw(p.nextSlab)) : t('top')}</div>`}</div>`;
   }).join('') : `<p class="muted">${t('noSchemes')}</p>`;
-  $('redemptions').innerHTML = meData.redemptions.map((x) => `<div class="row"><div>₹${(x.amount_paise / 100).toLocaleString('en-IN')}<div class="muted">${esc(x.upi_id)} · ${fmt(x.created_at)}</div></div><div class="muted">${esc(t('st')[x.status])}</div></div>`).join('');
+  $('redemptions').innerHTML = meData.redemptions.map((x) => `<div class="row"><div>₹${(x.amount_paise / 100).toLocaleString('en-IN')}<div class="muted">${esc(x.upi_id)} · ${fmt(x.created_at)}</div></div><div class="muted" style="text-align:right">${esc(t('st')[x.status])}${['REJECTED', 'FAILED'].includes(x.status) && x.failure_reason ? `<div>${esc(x.failure_reason)}</div>` : ''}</div></div>`).join('');
 }
 document.querySelectorAll('.tabs button').forEach((b) => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
@@ -225,6 +225,8 @@ $('backHome').onclick = () => show('vHome');
   try {
     info = await api(`/api/p/${brand}/info`);
     setBrand(info.brand); applyLang();
+    // City suggestions so "Ludhiana" isn't typed five different ways (testing report #6)
+    if ($('cityList')) $('cityList').innerHTML = (info.cities || []).map((c) => `<option value="${esc(c)}">`).join('');
     if (token) await loadHome(); else show('vLogin');
   } catch (e) { document.body.innerHTML = `<div class="wrap"><div class="card">${esc(e.message)}</div></div>`; }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

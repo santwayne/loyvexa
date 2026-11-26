@@ -8,9 +8,22 @@ import { settleRedemption } from '../services/redemption.js';
 import { getCallProvider } from '../services/calls/providers.js';
 import { settleCall } from '../services/calls/index.js';
 import { config } from '../config.js';
+import { query } from '../db/pool.js';
+import { flagByKey } from '../services/fraud.js';
 
 const r = Router();
-const verifyLimiter = rateLimit({ windowMs: 60_000, limit: config.verifyRateLimitPerMinute, standardHeaders: true, legacyHeaders: false });
+const verifyLimiter = rateLimit({
+  windowMs: 60_000, limit: config.verifyRateLimitPerMinute, standardHeaders: true, legacyHeaders: false,
+  // Testing report #1: crossing the rate limit now raises a fraud flag for the brand of the code being checked.
+  handler: async (req, res, _next, options) => {
+    try {
+      const code = extractCode(req.params.code);
+      const { rows: [q] } = code ? await query(`SELECT tenant_id FROM qr_codes WHERE code=$1`, [code]) : { rows: [] };
+      if (q) await flagByKey({ query }, { tenantId: q.tenant_id, rule: 'VERIFY_RATE_LIMIT', key: `ip:${req.ip}`, details: { ip: req.ip, limitPerMinute: config.verifyRateLimitPerMinute, code } });
+    } catch (e) { console.error('fraud flag (rate limit) failed', e.message); }
+    res.status(options.statusCode).json({ error: { code: 'RATE_LIMITED', message: 'Too many checks. Please wait a minute.' } });
+  },
+});
 
 r.get('/api/public/verify/:code', verifyLimiter, ah(async (req, res) => {
   const code = extractCode(req.params.code);

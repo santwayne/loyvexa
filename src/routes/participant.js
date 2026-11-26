@@ -13,6 +13,9 @@ import { requestRedemption, isValidUpi } from '../services/redemption.js';
 import { emit } from '../services/events.js';
 import { config } from '../config.js';
 import { progressFor } from '../services/schemes.js';
+import { citiesOf } from '../services/segments.js';
+
+const COMMON_CITIES = ['Ludhiana', 'Amritsar', 'Jalandhar', 'Patiala', 'Bathinda', 'Mohali', 'Chandigarh', 'Moga', 'Khanna', 'Phagwara', 'Hoshiarpur', 'Firozpur', 'Barnala', 'Sangrur', 'Pathankot', 'Kapurthala', 'Rajpura', 'Phillaur', 'Ahmedgarh', 'Delhi'];
 
 const r = Router();
 const otpLimiter = rateLimit({ windowMs: 60_000, limit: config.otpRateLimitPerMinute, standardHeaders: true, legacyHeaders: false });
@@ -23,7 +26,8 @@ const publicTenant = (t) => ({ name: t.name, slug: t.slug, brandColor: t.brand_c
 r.get('/:slug/info', ah(async (req, res) => {
   const t = await getTenantBySlug(req.params.slug);
   const s = settingsOf(t);
-  res.json({ brand: publicTenant(t), signupTypes: s.allowSelfSignup ? s.selfSignupTypes : [], pointValuePaise: s.pointValuePaise, minRedeemPoints: s.minRedeemPoints });
+  const cities = [...new Set([...(await citiesOf(t.id)), ...COMMON_CITIES])];
+  res.json({ brand: publicTenant(t), signupTypes: s.allowSelfSignup ? s.selfSignupTypes : [], pointValuePaise: s.pointValuePaise, minRedeemPoints: s.minRedeemPoints, cities });
 }));
 
 r.post('/:slug/auth/otp/request', otpLimiter, ah(async (req, res) => {

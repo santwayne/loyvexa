@@ -22,7 +22,7 @@ r.post('/webhook', ah(async (req, res) => {
       const v = ch.value || {};
       const channel = v.metadata?.phone_number_id ? await channelByPhoneNumberId(v.metadata.phone_number_id) : null;
       if (!channel) continue;
-      for (const st of v.statuses || []) jobs.push(applyStatus({ providerMsgId: st.id, status: st.status, error: st.errors?.[0]?.title }));
+      for (const st of v.statuses || []) jobs.push(applyStatus({ providerMsgId: st.id, status: st.status, error: st.errors?.[0] ? `(#${st.errors[0].code}) ${st.errors[0].title}${st.errors[0].error_data?.details ? ` — ${st.errors[0].error_data.details}` : ''}` : null }));
       for (const m of v.messages || []) {
         const text = m.type === 'text' ? m.text?.body
           : m.type === 'button' ? m.button?.text

@@ -17,6 +17,8 @@ const BUILDERS = {
   'redemption.paid': async (e, p) => ({ text: `✅ ${rupee(e.payload.amountPaise)} aapke UPI (${p.upi_id}) pe bhej diye gaye hain. Dhanyavaad 🙏`, params: [p.name || '', rupee(e.payload.amountPaise), p.upi_id || ''] }),
   // params: {{1}} name, {{2}} reason
   'redemption.failed': async (e, p) => ({ text: `⚠️ Aapka payment nahi ho paya (${e.payload.reason || 'UPI issue'}). Points wapas aapke wallet mein aa gaye hain. UPI ID check karke dobara try karo.`, params: [p.name || '', e.payload.reason || 'UPI issue'] }),
+  // params: {{1}} name, {{2}} points, {{3}} reason   (testing report #7: mechanic is told his points came back)
+  'redemption.rejected': async (e, p) => ({ text: `ℹ️ Aapki ${rupee(e.payload.amountPaise)} ki payout request reject hui${e.payload.reason ? ` (${e.payload.reason})` : ''}. Aapke ${Number(e.payload.points).toLocaleString('en-IN')} points wapas wallet mein aa gaye hain.`, params: [p.name || '', String(e.payload.points), e.payload.reason || ''] }),
   // params: {{1}} name, {{2}} points, {{3}} scheme
   'scheme.bonus': async (e, p) => ({ text: `🏆 Badhai ho${p.name ? ` ${p.name}` : ''}! *${e.payload.schemeName}* mein aapko *${Number(e.payload.points).toLocaleString('en-IN')} bonus points* mile.`, params: [p.name || '', String(e.payload.points), e.payload.schemeName] }),
   // params: {{1}} name, {{2}} amount, {{3}} points
