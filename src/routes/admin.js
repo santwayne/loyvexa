@@ -12,6 +12,7 @@ import * as ledger from '../services/ledger.js';
 import { processRedemption, rejectRedemption, isValidUpi } from '../services/redemption.js';
 import { emit } from '../services/events.js';
 import { bundleInfo } from '../services/bundle.js';
+import { cityFor } from '../services/segments.js';
 
 const r = Router();
 r.use(requireAdmin('SUPER_ADMIN', 'TENANT_ADMIN', 'TENANT_STAFF'), requireTenantScope);
@@ -149,23 +150,54 @@ r.get('/participants', ah(async (req, res) => {
      WHERE ${where.join(' AND ')} ORDER BY p.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
   res.json({ participants: rows, total: Number(rows[0]?.total || 0) });
 }));
+async function createParticipant(db, tenantId, b, source) {
+  const mobile = normalizeMobile(b.mobile);
+  if (!mobile) throw badRequest('INVALID_MOBILE', `Invalid mobile number: ${b.mobile}`);
+  if (b.upiId && !isValidUpi(b.upiId)) throw badRequest('INVALID_UPI', 'Invalid UPI ID');
+  const city = await cityFor(tenantId, b.city);
+  try {
+    await db.query('SAVEPOINT add_p');
+    const { rows: [p] } = await db.query(
+      `INSERT INTO participants (tenant_id, type, name, mobile, city, state, pincode, upi_id, parent_id, external_ref, language)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,coalesce($11,'hi')) RETURNING *`,
+      [tenantId, b.type, b.name, mobile, city, b.state, b.pincode, b.upiId, b.parentId, b.externalRef, b.language]);
+    await db.query(`INSERT INTO wallets (participant_id, tenant_id) VALUES ($1,$2)`, [p.id, tenantId]);
+    await emit(db, tenantId, 'participant.created', { participantId: p.id, type: p.type, source });
+    await db.query('RELEASE SAVEPOINT add_p');
+    return p;
+  } catch (e) {
+    await db.query('ROLLBACK TO SAVEPOINT add_p');
+    if (e.code === '23505') throw conflict('MOBILE_EXISTS', `${mobile} is already registered`);
+    throw e;
+  }
+}
 r.post('/participants', ah(async (req, res) => {
   const b = parse(participantSchema, req.body);
-  const mobile = normalizeMobile(b.mobile);
-  if (!mobile) throw badRequest('INVALID_MOBILE', 'Invalid mobile number');
-  if (b.upiId && !isValidUpi(b.upiId)) throw badRequest('INVALID_UPI', 'Invalid UPI ID');
-  const p = await tx(async (db) => {
-    try {
-      const { rows: [p] } = await db.query(
-        `INSERT INTO participants (tenant_id, type, name, mobile, city, state, pincode, upi_id, parent_id, external_ref, language)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,coalesce($11,'hi')) RETURNING *`,
-        [req.tenantId, b.type, b.name, mobile, b.city, b.state, b.pincode, b.upiId, b.parentId, b.externalRef, b.language]);
-      await db.query(`INSERT INTO wallets (participant_id, tenant_id) VALUES ($1,$2)`, [p.id, req.tenantId]);
-      await emit(db, req.tenantId, 'participant.created', { participantId: p.id, type: p.type, source: 'admin' });
-      return p;
-    } catch (e) { if (e.code === '23505') throw conflict('MOBILE_EXISTS', 'This mobile is already registered'); throw e; }
-  });
+  const p = await tx((db) => createParticipant(db, req.tenantId, b, 'admin'));
   res.status(201).json({ participant: p });
+}));
+
+/**
+ * Testing report 2 #11: add dealers / mechanics in bulk from the console.
+ * Body { rows: [{ type, name, mobile, city?, state?, pincode?, upiId?, externalRef?, language? }] } (max 2,000).
+ * Each row is saved on its own; the answer says which rows failed and why.
+ */
+r.post('/participants/import', ah(async (req, res) => {
+  const { rows } = parse(z.object({ rows: z.array(z.record(z.any())).min(1).max(2000) }), req.body);
+  const out = { total: rows.length, created: 0, duplicates: 0, errors: [] };
+  await tx(async (db) => {
+    for (const [i, raw] of rows.entries()) {
+      const row = { ...raw, type: String(raw.type || 'DEALER').trim().toUpperCase() };
+      const ok = participantSchema.safeParse(Object.fromEntries(Object.entries(row).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, String(v).trim()])));
+      if (!ok.success) { out.errors.push({ row: i + 2, mobile: raw.mobile || '', error: ok.error.issues.map((x) => `${x.path.join('.') || 'row'}: ${x.message}`).join('; ') }); continue; }
+      try { await createParticipant(db, req.tenantId, ok.data, 'admin_import'); out.created++; }
+      catch (e) {
+        if (e.code === 'MOBILE_EXISTS') out.duplicates++;
+        else out.errors.push({ row: i + 2, mobile: raw.mobile || '', error: e.message });
+      }
+    }
+  });
+  res.json(out);
 }));
 r.get('/participants/:id', ah(async (req, res) => {
   const { rows: [p] } = await query(`SELECT * FROM participants WHERE id=$1 AND tenant_id=$2`, [req.params.id, req.tenantId]);
@@ -186,7 +218,7 @@ r.patch('/participants/:id', ah(async (req, res) => {
        pincode=coalesce($7,pincode), upi_id=coalesce($8,upi_id), status=coalesce($9,status), parent_id=coalesce($10,parent_id),
        external_ref=coalesce($11,external_ref), scan_blocked_until = CASE WHEN $12 THEN NULL ELSE scan_blocked_until END
      WHERE id=$1 AND tenant_id=$2 RETURNING *`,
-    [req.params.id, req.tenantId, b.name, b.type, b.city, b.state, b.pincode, b.upiId, b.status, b.parentId, b.externalRef, !!b.clearScanBlock]);
+    [req.params.id, req.tenantId, b.name, b.type, b.city ? await cityFor(req.tenantId, b.city) : undefined, b.state, b.pincode, b.upiId, b.status, b.parentId, b.externalRef, !!b.clearScanBlock]);
   if (!p) throw notFound('Participant');
   res.json({ participant: p });
 }));

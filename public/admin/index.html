@@ -32,7 +32,9 @@
   main { padding:24px 28px; overflow:auto } h2 { margin:0 0 16px; font-size:24px; font-weight:600; letter-spacing:-.01em }
   .kpis { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; margin-bottom:18px }
   .kpi { background:#fff; border-radius:14px; padding:14px 16px; border:1px solid var(--line); box-shadow:0 1px 2px rgba(17,24,39,.06) } .kpi .v { font-size:28px; font-weight:600; font-variant-numeric:tabular-nums } .kpi .l { color:var(--muted); font-size:13px }
-  .panel { background:#fff; border-radius:14px; border:1px solid var(--line); padding:16px 20px; margin-bottom:16px }
+  .panel { background:#fff; border-radius:14px; border:1px solid var(--line); padding:16px 20px; margin-bottom:16px; overflow-x:auto }
+  .testbadge { display:inline-block; padding:2px 10px; border-radius:9999px; font-size:12px; font-weight:700; background:#ede9fe; color:#5b21b6; letter-spacing:.03em }
+  .kv { margin:0; padding:0; list-style:none; font-size:13px } .kv li { margin:2px 0 } .kv b { font-weight:500; color:var(--muted) }
   .panel h3 { margin:0 0 12px; font-size:18px; font-weight:600 } .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px }
   table { width:100%; border-collapse:collapse } th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:middle }
   th { font-size:12px; color:var(--muted); font-weight:500; background:#f3f4f6 } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums }

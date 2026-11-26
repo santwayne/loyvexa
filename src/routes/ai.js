@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { config } from '../config.js';
+import { config, DEFAULT_TENANT_SETTINGS } from '../config.js';
 import { normalizeMobile } from '../lib/codes.js';
 import { ah, parse, notFound, badRequest, unauthorized, forbidden, conflict } from '../lib/errors.js';
 import { requireAdmin, requireTenantScope, signAdmin } from '../middleware/auth.js';
@@ -45,6 +45,9 @@ r.get('/admin/ai', ...staff, ah(async (req, res) => {
       aiAutonomy: s.autonomy, aiDailyCap: s.aiDailyCap, aiMaxTouchesPerWeek: s.aiMaxTouchesPerWeek, aiReorderMinOrders: s.aiReorderMinOrders,
       aiSlabPushDays: s.aiSlabPushDays, aiSlabPushWithinPct: s.aiSlabPushWithinPct, aiWinbackMinRupees: s.aiWinbackMinRupees,
     },
+    // Testing report 2 #8: blank fields use these; the console shows "Default: N" as the placeholder.
+    defaults: Object.fromEntries(['aiBriefHour', 'aiDailyCap', 'aiMaxTouchesPerWeek', 'aiWinbackMinRupees', 'aiSlabPushDays'].map((k) => [k, DEFAULT_TENANT_SETTINGS[k]])),
+    custom: Object.keys(tenant.settings || {}).filter((k) => tenant.settings[k] !== null && tenant.settings[k] !== undefined && tenant.settings[k] !== ''),
     // Loyalty actions only; win-back calls only with WayneRing (bundle rule).
     types: actionTypesFor(tenant).map((t) => ({ type: t, label: LABEL[t].one, channel: CHANNEL[t] })),
     allTypes: ACTION_TYPES.map((t) => ({ type: t, label: LABEL[t].one, channel: CHANNEL[t] })),
@@ -59,7 +62,7 @@ r.post('/admin/ai/plan', ...adminOnly, ah(async (req, res) => {
   const tenant = await getTenant(req.tenantId);
   const planned = await planTenant(tenant);
   const brief = await composeBrief(tenant);
-  res.json({ planned: planned.length, waiting: brief.items.length, preview: brief.text });
+  res.json({ planned: planned.length, waiting: brief.items.length, preview: brief.text, reasons: planned.why || [] });
 }));
 
 r.post('/admin/ai/brief', ...adminOnly, ah(async (req, res) => {
@@ -97,11 +100,15 @@ r.patch('/admin/ai/settings', ...adminOnly, ah(async (req, res) => {
     aiOverdueDays: z.number().int().min(1).max(180).optional(),
     aiOverdueMinRupees: z.number().int().min(0).optional(),
     aiWinbackMinRupees: z.number().int().min(0).optional(),
+    // Testing report 2 #8: fields left blank go back to the default
+    reset: z.array(z.enum(['aiBriefHour', 'aiDailyCap', 'aiMaxTouchesPerWeek', 'aiWinbackMinRupees', 'aiSlabPushDays'])).optional(),
   }), req.body);
+  const reset = b.reset || []; delete b.reset;
   if (b.aiBriefNumbers) b.aiBriefNumbers = b.aiBriefNumbers.map((m) => normalizeMobile(m)).filter(Boolean);
   if (b.aiAutonomy) for (const t of ['FRAUD_REVIEW', 'SCHEME_IDEA']) if (b.aiAutonomy[t] === 'AUTO') throw badRequest('NOT_ALLOWED', `${LABEL[t].one} always needs a person to approve`);
   const tenant = await getTenant(req.tenantId);
   const settings = { ...(tenant.settings || {}), ...b, ...(b.aiAutonomy ? { aiAutonomy: { ...(tenant.settings?.aiAutonomy || {}), ...b.aiAutonomy } } : {}) };
+  for (const k of reset) delete settings[k];
   await query(`UPDATE tenants SET settings=$2 WHERE id=$1`, [req.tenantId, JSON.stringify(settings)]);
   res.json({ ok: true });
 }));

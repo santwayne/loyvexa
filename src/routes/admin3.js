@@ -5,9 +5,11 @@ import { ah, parse, notFound, conflict, forbidden } from '../lib/errors.js';
 import { requireAdmin, requireTenantScope } from '../middleware/auth.js';
 import { getTenant } from '../services/tenants.js';
 import { hasWayneRing } from '../services/bundle.js';
-import { recomputeTenant, SEGMENTS, audiencePreview, citiesOf } from '../services/segments.js';
+import { recomputeTenant, SEGMENTS, audiencePreview, citiesOf, fixCities } from '../services/segments.js';
 import * as calls from '../services/calls/index.js';
-import { createWaCampaign, launchWaCampaign, sendDue, waCampaignStats } from '../services/campaigns.js';
+import { createWaCampaign, launchWaCampaign, sendDue, waCampaignStats, waCampaignRecipients } from '../services/campaigns.js';
+import { assertApprovedTemplate, syncOptIn } from '../services/whatsapp.js';
+import { config } from '../config.js';
 import { pushPlaced } from '../services/orders.js';
 import { runExpiry } from '../services/expiry.js';
 
@@ -37,6 +39,13 @@ r.post('/participants/:id/flags', ah(async (req, res) => {
   if (!p) throw notFound('Participant');
   res.json({ participant: p });
 }));
+// Testing report 2 #1: "Unblock WhatsApp" — clears STOP here AND on Loopdesk's list for the shared number.
+r.post('/participants/:id/whatsapp-unblock', ah(async (req, res) => {
+  const { rows: [p] } = await query(`UPDATE participants SET wa_opt_out=false WHERE id=$1 AND tenant_id=$2 RETURNING id, mobile, wa_opt_out`, [req.params.id, req.tenantId]);
+  if (!p) throw notFound('Participant');
+  const loopdesk = await syncOptIn(req.tenantId, p.mobile, true);
+  res.json({ participant: p, loopdesk });
+}));
 
 // ================= AI call campaigns =================
 const callBody = z.object({
@@ -45,7 +54,8 @@ const callBody = z.object({
 });
 r.get('/call-campaigns', ah(async (req, res) => {
   const { rows } = await query(`SELECT * FROM call_campaigns WHERE tenant_id=$1 ORDER BY created_at DESC`, [req.tenantId]);
-  res.json({ campaigns: await Promise.all(rows.map(async (c) => ({ ...c, stats: await calls.campaignStats(c.id) }))) });
+  // Testing report 2 #2/#3: tell the console when the server only simulates calls.
+  res.json({ provider: config.calls.provider, testMode: config.calls.provider === 'mock', campaigns: await Promise.all(rows.map(async (c) => ({ ...c, stats: await calls.campaignStats(c.id) }))) });
 }));
 // Bundle rule: calls go only through WayneRing, and only when it is in the client's package.
 const needsWayneRing = ah(async (req, res, next) => {
@@ -57,7 +67,7 @@ r.post('/call-campaigns/preview', adminOnly, ah(async (req, res) => {
   const b = parse(callBody.pick({ segments: true, participantTypes: true, city: true, schemeId: true }), req.body);
   res.json(await audiencePreview({ query }, { tenantId: req.tenantId, segments: b.segments || [], types: b.participantTypes || [], city: b.city || null, schemeId: b.schemeId || null }));
 }));
-r.get('/cities', ah(async (req, res) => res.json({ cities: await citiesOf(req.tenantId) })));
+r.get('/cities', ah(async (req, res) => { await fixCities(req.tenantId); res.json({ cities: await citiesOf(req.tenantId) }); }));
 r.post('/call-campaigns', adminOnly, needsWayneRing, ah(async (req, res) => {
   res.status(201).json({ campaign: await calls.createCampaign({ tenantId: req.tenantId, adminId: req.admin.id, body: parse(callBody, req.body) }) });
 }));
@@ -70,7 +80,7 @@ r.post('/call-campaigns/:id/cancel', adminOnly, ah(async (req, res) => {
 }));
 r.get('/call-campaigns/:id/calls', ah(async (req, res) => {
   const { rows } = await query(`
-    SELECT k.id, k.status, k.outcome, k.summary, k.attempted_at, k.completed_at, k.context->>'firstMessage' AS first_message,
+    SELECT k.id, k.status, k.outcome, k.summary, k.test_mode, k.attempted_at, k.completed_at, k.context->>'firstMessage' AS first_message,
            p.name, p.mobile, p.type, p.city, p.segment
       FROM calls k JOIN participants p ON p.id=k.participant_id WHERE k.campaign_id=$1 AND k.tenant_id=$2 ORDER BY k.created_at`, [req.params.id, req.tenantId]);
   res.json({ calls: rows });
@@ -114,9 +124,17 @@ r.get('/wa-campaigns', ah(async (req, res) => {
   res.json({ campaigns: await Promise.all(rows.map(async (c) => ({ ...c, stats: await waCampaignStats(c.id) }))) });
 }));
 r.post('/wa-campaigns', adminOnly, ah(async (req, res) => {
-  res.status(201).json({ campaign: await createWaCampaign({ tenantId: req.tenantId, adminId: req.admin.id, body: parse(waBody, req.body) }) });
+  const body = parse(waBody, req.body);
+  await assertApprovedTemplate(req.tenantId, body.templateName, body.language); // testing report 2 #6
+  res.status(201).json({ campaign: await createWaCampaign({ tenantId: req.tenantId, adminId: req.admin.id, body }) });
 }));
-r.post('/wa-campaigns/:id/launch', adminOnly, ah(async (req, res) => res.json(await launchWaCampaign({ tenantId: req.tenantId, campaignId: req.params.id }))));
+r.get('/wa-campaigns/:id/recipients', ah(async (req, res) => res.json({ recipients: await waCampaignRecipients(req.tenantId, req.params.id) })));
+r.post('/wa-campaigns/:id/launch', adminOnly, ah(async (req, res) => {
+  const { rows: [c] } = await query(`SELECT template_name, language FROM wa_campaigns WHERE id=$1 AND tenant_id=$2`, [req.params.id, req.tenantId]);
+  if (!c) throw notFound('Campaign');
+  await assertApprovedTemplate(req.tenantId, c.template_name, c.language);
+  res.json(await launchWaCampaign({ tenantId: req.tenantId, campaignId: req.params.id }));
+}));
 r.post('/wa-campaigns/:id/cancel', adminOnly, ah(async (req, res) => {
   const { rows: [c] } = await query(`UPDATE wa_campaigns SET status='CANCELLED' WHERE id=$1 AND tenant_id=$2 AND status IN ('DRAFT','RUNNING') RETURNING *`, [req.params.id, req.tenantId]);
   if (!c) throw conflict('INVALID_STATE', 'Campaign already finished');

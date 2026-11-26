@@ -1,3 +1,4 @@
+import { canonicalCity, tidyCity } from '../lib/cities.js';
 import { query, tx } from '../db/pool.js';
 import { settingsOf } from './tenants.js';
 import { emit } from './events.js';
@@ -107,8 +108,38 @@ export async function audiencePreview(db, { tenantId, segments = [], types = [],
   return out;
 }
 
-/** Known cities of a brand, for the city dropdowns. */
+/** Known cities of a brand, for the city dropdowns (one spelling each — testing report 2 #10). */
 export async function citiesOf(tenantId) {
   const { rows } = await query(`SELECT city, count(*)::int AS n FROM participants WHERE tenant_id=$1 AND city IS NOT NULL GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 100`, [tenantId]);
-  return rows.map((r) => r.city);
+  const { rows: [t] } = await query(`SELECT settings FROM tenants WHERE id=$1`, [tenantId]);
+  const extra = Array.isArray(t?.settings?.cities) ? t.settings.cities.map(tidyCity).filter(Boolean) : [];
+  return [...new Set([...rows.map((r) => r.city), ...extra])];
+}
+
+/** Brand-specific spellings to trust: settings.cities + existing cities that aren't a typo of a common city. */
+async function trustedCities(tenantId) {
+  const { rows: [t] } = await query(`SELECT settings FROM tenants WHERE id=$1`, [tenantId]);
+  const extra = Array.isArray(t?.settings?.cities) ? t.settings.cities : [];
+  const { rows } = await query(`SELECT DISTINCT city FROM participants WHERE tenant_id=$1 AND city IS NOT NULL`, [tenantId]);
+  return [...extra, ...rows.map((r) => r.city).filter((c) => canonicalCity(c, extra) === tidyCity(c))];
+}
+
+/** The one spelling to store for a typed city ("Ludihiana" → "Ludhiana"). */
+export async function cityFor(tenantId, input) {
+  if (!input || !String(input).trim()) return null;
+  return canonicalCity(input, await trustedCities(tenantId));
+}
+
+/** Re-spell existing rows ("Ludihiana" → "Ludhiana"). Safe to run any time. */
+export async function fixCities(tenantId) {
+  const where = tenantId ? 'WHERE tenant_id=$1' : '';
+  const { rows } = await query(`SELECT DISTINCT tenant_id, city FROM participants ${where ? `${where} AND` : 'WHERE'} city IS NOT NULL`, tenantId ? [tenantId] : []);
+  let fixed = 0;
+  const trusted = {};
+  for (const r of rows) {
+    trusted[r.tenant_id] ||= await query(`SELECT settings FROM tenants WHERE id=$1`, [r.tenant_id]).then(({ rows: [t] }) => (Array.isArray(t?.settings?.cities) ? t.settings.cities : []));
+    const c = canonicalCity(r.city, trusted[r.tenant_id]);
+    if (c && c !== r.city) fixed += (await query(`UPDATE participants SET city=$3 WHERE tenant_id=$1 AND city=$2`, [r.tenant_id, r.city, c])).rowCount;
+  }
+  return fixed;
 }

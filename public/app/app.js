@@ -2,7 +2,7 @@
 const T = {
   hi: {
     welcome: 'स्वागत है 🙏', welcomeSub: 'हर असली प्रोडक्ट पर QR स्कैन करो, पॉइंट्स कमाओ, सीधा UPI में पैसे पाओ।',
-    mobile: 'मोबाइल नंबर', sendOtp: 'OTP भेजो', otp: 'OTP डालो', verify: 'आगे बढ़ो', name: 'आपका नाम', iam: 'मैं हूँ', city: 'शहर',
+    mobile: 'मोबाइल नंबर', sendOtp: 'OTP भेजो', otp: 'OTP डालो', verify: 'आगे बढ़ो', name: 'आपका नाम', iam: 'मैं हूँ', city: 'शहर', pickCity: 'शहर चुनो', otherCity: 'दूसरा शहर…', typeCity: 'शहर का नाम लिखो',
     yourPoints: 'आपके पॉइंट्स', history: 'हिस्ट्री', redeem: 'पैसे निकालो', profile: 'प्रोफाइल', redeemTitle: 'UPI में पैसे पाओ',
     upi: 'UPI ID', points: 'कितने पॉइंट्स', redeemNow: 'रिक्वेस्ट भेजो', payouts: 'पेमेंट्स', save: 'सेव करो', logout: 'लॉग आउट',
     scan: '📷  स्कैन करो', scanMore: 'और स्कैन करो', home: 'होम', submitCode: 'कोड जमा करो', cancel: 'बंद करो',
@@ -26,7 +26,7 @@ const T = {
   },
   en: {
     welcome: 'Welcome 🙏', welcomeSub: 'Scan the QR on every genuine product, earn points, get cash straight to UPI.',
-    mobile: 'Mobile number', sendOtp: 'Send OTP', otp: 'Enter OTP', verify: 'Continue', name: 'Your name', iam: 'I am a', city: 'City',
+    mobile: 'Mobile number', sendOtp: 'Send OTP', otp: 'Enter OTP', verify: 'Continue', name: 'Your name', iam: 'I am a', city: 'City', pickCity: 'Choose your city', otherCity: 'Other city…', typeCity: 'Type your city',
     yourPoints: 'Your points', history: 'History', redeem: 'Cash out', profile: 'Profile', redeemTitle: 'Get money in UPI',
     upi: 'UPI ID', points: 'Points', redeemNow: 'Send request', payouts: 'Payouts', save: 'Save', logout: 'Log out',
     scan: '📷  Scan', scanMore: 'Scan more', home: 'Home', submitCode: 'Submit code', cancel: 'Close',
@@ -75,7 +75,7 @@ function applyLang() {
   document.documentElement.lang = lang;
   document.querySelectorAll('[data-t]').forEach((el) => { const v = t(el.dataset.t); if (typeof v === 'string') el.textContent = v; });
   $('langBtn').textContent = lang === 'hi' ? 'English' : 'हिंदी';
-  if (info) $('ptype').innerHTML = info.signupTypes.map((x) => `<option value="${x}">${t('types')[x] || x}</option>`).join('');
+  if (info) { $('ptype').innerHTML = info.signupTypes.map((x) => `<option value="${x}">${t('types')[x] || x}</option>`).join(''); fillCities(); }
   if (meData) renderHome();
 }
 $('langBtn').onclick = () => { lang = lang === 'hi' ? 'en' : 'hi'; store.set('wl_lang', lang); applyLang(); };
@@ -104,7 +104,7 @@ $('sendOtp').onclick = async () => {
 $('verifyOtp').onclick = async () => {
   $('loginErr').textContent = ''; $('verifyOtp').disabled = true;
   try {
-    const r = await api(`/api/p/${brand}/auth/otp/verify`, { method: 'POST', body: { mobile: $('mobile').value, otp: $('otp').value, name: $('name').value || undefined, type: $('ptype').value, city: $('city').value || undefined } });
+    const r = await api(`/api/p/${brand}/auth/otp/verify`, { method: 'POST', body: { mobile: $('mobile').value, otp: $('otp').value, name: $('name').value || undefined, type: $('ptype').value, city: cityVal('city', 'cityOther') } });
     token = r.token; store.set(`wl_token_${brand}`, token);
     await loadHome();
   } catch (e) { $('loginErr').textContent = e.message; } finally { $('verifyOtp').disabled = false; }
@@ -127,7 +127,7 @@ function renderHome() {
   $('rupees').textContent = t('worth')(rupeeValue.toLocaleString('en-IN'));
   $('held').textContent = wallet.held ? t('heldTxt')(wallet.held, ((wallet.held * pointValuePaise) / 100).toLocaleString('en-IN')) : '';
   $('redeemHint').textContent = t('min')(minRedeemPoints, pointValuePaise / 100);
-  $('upi').value = participant.upiId || ''; $('pName').value = participant.name || ''; $('pCity').value = participant.city || '';
+  $('upi').value = participant.upiId || ''; $('pName').value = participant.name || ''; setCity('pCity', 'pCityOther', participant.city);
   $('pMobile').textContent = `+${participant.mobile}`;
   const fmt = (d) => new Date(d).toLocaleString(lang === 'hi' ? 'hi-IN' : 'en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   $('ledger').innerHTML = meData.ledger.length ? meData.ledger.map((e) => `<div class="row"><div>${esc(t('lt')[e.type] || e.type)}<div class="muted">${esc(e.note || '')} · ${fmt(e.created_at)}</div></div><div class="${e.points > 0 ? 'plus' : 'minus'}">${e.points > 0 ? '+' : ''}${e.points}</div></div>`).join('') : `<p class="muted">${t('empty')}</p>`;
@@ -159,7 +159,7 @@ $('redeemBtn').onclick = async () => {
     await loadHome();
   } catch (e) { $('redeemErr').textContent = e.message; } finally { $('redeemBtn').disabled = false; }
 };
-$('saveProfile').onclick = async () => { await api('/api/p/me', { method: 'PATCH', body: { name: $('pName').value, city: $('pCity').value } }); await loadHome(); };
+$('saveProfile').onclick = async () => { await api('/api/p/me', { method: 'PATCH', body: { name: $('pName').value, ...(cityVal('pCity', 'pCityOther') ? { city: cityVal('pCity', 'pCityOther') } : {}) } }); await loadHome(); };
 
 // ---------- Scanning ----------
 let stream = null; let scanning = false; let detector = null; let jsQRLoaded = false;
@@ -219,14 +219,34 @@ $('closeCam').onclick = closeCam;
 $('manualBtn').onclick = () => { const c = $('manualCode').value.trim(); if (c) { closeCam(); submitScan(c); } };
 $('backHome').onclick = () => show('vHome');
 
+// ---------- City dropdown (testing report 2 #10) ----------
+function fillCities() {
+  document.querySelectorAll('.citySel').forEach((sel) => {
+    const keep = sel.value;
+    sel.innerHTML = `<option value="">${esc(t('pickCity'))}</option>${(info?.cities || []).map((c) => `<option>${esc(c)}</option>`).join('')}<option value="__other">${esc(t('otherCity'))}</option>`;
+    const other = $(`${sel.id}Other`);
+    other.placeholder = t('typeCity');
+    sel.onchange = () => { other.classList.toggle('hidden', sel.value !== '__other'); if (sel.value === '__other') other.focus(); };
+    if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  });
+}
+function cityVal(selId, otherId) {
+  const v = $(selId).value;
+  return (v === '__other' ? $(otherId).value.trim() : v) || undefined;
+}
+function setCity(selId, otherId, city) {
+  const sel = $(selId);
+  if (!city) { sel.value = ''; return; }
+  if (![...sel.options].some((o) => o.value === city)) sel.insertBefore(new Option(city, city), sel.options[sel.options.length - 1]);
+  sel.value = city; $(otherId).classList.add('hidden');
+}
+
 // ---------- Boot ----------
 (async function boot() {
   if (!brand) { document.body.innerHTML = '<div class="wrap"><div class="card">Brand link missing. Open the link shared by your brand.</div></div>'; return; }
   try {
     info = await api(`/api/p/${brand}/info`);
-    setBrand(info.brand); applyLang();
-    // City suggestions so "Ludhiana" isn't typed five different ways (testing report #6)
-    if ($('cityList')) $('cityList').innerHTML = (info.cities || []).map((c) => `<option value="${esc(c)}">`).join('');
+    setBrand(info.brand); applyLang(); // fills the city dropdowns too (testing report 2 #10)
     if (token) await loadHome(); else show('vLogin');
   } catch (e) { document.body.innerHTML = `<div class="wrap"><div class="card">${esc(e.message)}</div></div>`; }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

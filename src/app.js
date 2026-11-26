@@ -38,6 +38,9 @@ export function createApp() {
   app.use(cors({ origin: config.corsOrigins.includes('*') ? true : config.corsOrigins }));
   // Accounting/DMS push API has its own body parsers (JSON, XML, CSV; up to 20 MB)
   app.use('/api/connect', connectRoutes);
+  // Testing report 2 #12: file uploads from the console (CSV / Tally export) can be bigger than 1 MB.
+  app.use('/api/admin/connectors', express.json({ limit: '25mb' }));
+  app.use('/api/admin/participants/import', express.json({ limit: '10mb' }));
   app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); } }));
   if (process.env.NODE_ENV !== 'test') app.use(morgan('tiny'));
 
@@ -60,6 +63,7 @@ export function createApp() {
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, _next) => {
     if (err instanceof AppError) return res.status(err.status).json({ error: { code: err.code, message: err.message, details: err.details } });
+    if (err.type === 'entity.too.large') return res.status(413).json({ error: { code: 'TOO_LARGE', message: 'File is too big for one upload — split it into smaller files (max 25 MB).' } });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: { code: 'BAD_JSON', message: 'Malformed JSON' } });
     console.error(err);
     res.status(500).json({ error: { code: 'INTERNAL', message: 'Something went wrong' } });

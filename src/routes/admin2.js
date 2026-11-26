@@ -71,8 +71,14 @@ r.post('/connectors/:id/upload', adminOnly, ah(async (req, res) => {
   const { rows: [c] } = await query(`SELECT * FROM connectors WHERE id=$1 AND tenant_id=$2`, [req.params.id, req.tenantId]);
   if (!c) throw notFound('Connector');
   let body; try { body = JSON.parse(content); } catch { body = undefined; }
-  const docs = parseDocuments(c.type, { body, rawText: content, config: c.config });
-  res.json(await ingestDocuments({ connector: c, docs }));
+  // Testing report 2 #12: a CSV uploaded on a Tally / Zoho / custom connector was parsed as that
+  // format, found nothing, and the console showed no message. A CSV file is read as CSV whatever the connector.
+  const t = content.trim();
+  const looksCsv = body === undefined && !t.startsWith('<') && /[,;\t]/.test(t.split(/\r?\n/)[0] || '');
+  const docs = parseDocuments(looksCsv ? 'CSV' : c.type, { body, rawText: content, config: c.config });
+  const rows = looksCsv ? Math.max(0, t.split(/\r?\n/).filter((l) => l.trim()).length - 1) : null;
+  if (!docs.length) throw badRequest('NOTHING_FOUND', `No invoices found in this file${rows != null ? ` (${rows} data rows read)` : ''}. ${looksCsv ? 'Columns needed: invoice number, date, amount (plus party mobile / GSTIN and item SKU, qty).' : 'Upload a CSV, Tally XML or JSON export.'}`);
+  res.json({ ...(await ingestDocuments({ connector: c, docs })), rows, format: looksCsv ? 'CSV' : c.type });
 }));
 
 // ================= Invoices =================
