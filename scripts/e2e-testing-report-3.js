@@ -60,6 +60,11 @@ assert.equal(classifyCallReport({ status: 'ended', ended_reason: 'customer-busy'
 assert.equal(classifyCallReport({ status: 'failed', ended_reason: 'twilio-failed-to-connect-call' }).notDialled, true);
 assert.equal(classifyCallReport({ outcome: 'interested', duration: 45 }).outcome, 'INTERESTED');
 assert.equal(classifyCallReport({ ended_reason: 'silence-timed-out', duration: 14 }).outcome, 'NO_ANSWER');
+// WayneRing's payload since aivoicebackend "dial status" PR: Plivo cause shown as-is
+const ins = classifyCallReport({ status: 'failed', answered: false, dial_status: 'not-dialled', ended_reason: 'not-dialled: Insufficient Balance', hangup_cause: 'Insufficient Balance' });
+assert.equal(ins.reason, 'Insufficient Balance'); assert.equal(ins.notDialled, true);
+assert.equal(classifyCallReport({ status: 'completed', outcome: 'NO_ANSWER', answered: false, ended_reason: 'customer-declined' }).outcome, 'NO_ANSWER');
+assert.equal(classifyCallReport({ status: 'completed', outcome: 'NO_ANSWER', answered: true, ended_reason: 'silence-timed-out', duration_seconds: 18 }).outcome, 'NO_ANSWER');
 
 const p1 = await add(1); const p2 = await add(2); const p3 = await add(3);
 const { campaign: cc } = await must(api('POST', '/api/admin/call-campaigns', { token: A, body: { name: 'mandeep call', script: 'WINBACK', participantTypes: ['DEALER'] } }), 201);
@@ -142,6 +147,12 @@ await must(api('POST', `/api/admin/wa-campaigns/${wc.id}/launch`, { token: A }))
 await must(api('POST', '/api/admin/wa-campaigns/run', { token: A }));
 const [wmsg] = await q(`SELECT payload FROM messages WHERE tenant_id=$1 AND participant_id=$2 AND direction='OUT' AND payload->>'type'='template' ORDER BY created_at DESC LIMIT 1`, [tenant.id, mech.id]);
 assert.deepEqual(wmsg.payload.template.components[0].parameters.map((x) => x.text), ['Raju', line, line]);
+const { campaign: wc2 } = await must(api('POST', '/api/admin/wa-campaigns', { token: A, body: { name: 'empty param', templateName: 'any_template', language: 'en', params: ['{name}', '{city_unknown}'], participantTypes: ['MECHANIC'] } }), 201);
+await must(api('POST', `/api/admin/wa-campaigns/${wc2.id}/launch`, { token: A }));
+await q(`UPDATE wa_campaign_recipients SET status='QUEUED' WHERE campaign_id=$1`, [wc2.id]);
+await must(api('POST', '/api/admin/wa-campaigns/run', { token: A }));
+const [w2] = await q(`SELECT payload FROM messages WHERE tenant_id=$1 AND participant_id=$2 AND direction='OUT' AND payload->>'type'='template' ORDER BY created_at DESC LIMIT 1`, [tenant.id, mech.id]);
+assert.deepEqual(w2.payload.template.components[0].parameters.map((x) => x.text), ['Raju', '-']); // never an empty param
 ok('#7 real scans / slab / remaining in call script AND WhatsApp campaign; {scheme} and {scheme_progress} work in both');
 
 // ---------- #8 CSV import errors in plain language ----------

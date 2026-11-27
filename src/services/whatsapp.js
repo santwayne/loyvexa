@@ -235,7 +235,8 @@ export const sendTemplate = ({ tenantId, participantId, to, name, language = 'en
       template: {
         name, language: { code: language },
         components: [
-          ...(params.length ? [{ type: 'body', parameters: params.map((p) => ({ type: 'text', text: String(p) })) }] : []),
+          // Meta rejects an empty template parameter (#131008), e.g. an order with no DMS ref.
+          ...(params.length ? [{ type: 'body', parameters: params.map((p) => ({ type: 'text', text: String(p ?? '').trim() || '-' })) }] : []),
           ...(buttonParam ? [{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: String(buttonParam) }] }] : []),
         ],
       },
