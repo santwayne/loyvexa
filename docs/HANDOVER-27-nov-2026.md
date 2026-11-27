@@ -68,3 +68,16 @@ start the server with `OTP_RATE_LIMIT_PER_MINUTE=1000`). `e2e-phase3` needs `CAL
 - Meta: `loyvexa_participant_created` (or `loyvexa_welcome`) must be approved — params {{1}} name, {{2}} brand.
 - PENDING items from the report (Campaign FAILED status after Meta approval, Korvo orders, "Send plan to
   WhatsApp") can be tested once the above are live.
+
+## 6. Related PRs (same bug report)
+
+| Repo | PR | Covers | Deploy |
+|------|----|--------|--------|
+| santwayne/loyvexa | #14 (merged) | #1, #3–#8 Loyvexa side | `git pull origin main && docker compose up -d --build` |
+| santwayne/loyvexa | #15 | Plivo hangup cause shown as call reason; empty template params sent as `-` | same |
+| santwayne/loopdeskai-software | #12 | #2 owner-number forwarding, #3 STOP spellings, #4 all `loyvexa_*` templates defined, #5 reply from the number the dealer wrote to | stash/pull/pop, `npm install`, `npm run build`, `pm2 restart loopdesk --update-env`, then **`npm run wa:templates`** |
+| Wayneesolutions/aivoicebackend | #35 | #1 real dial status (answered / no-answer / busy / not-dialled + Plivo cause) | India gateway: `git pull && npm install && pm2 restart india-gateway --update-env` |
+
+Order: merge + deploy WayneRing #35 and Loopdesk #12, run `npm run wa:templates` on Loopdesk and wait for
+Meta approval, then re-test the live console (section 3). `loyvexa_otp` is an AUTHENTICATION template —
+create it by hand in Meta WhatsApp Manager.
