@@ -1,6 +1,6 @@
 import { query } from '../db/pool.js';
 import { config } from '../config.js';
-import { senderFor, sendText, sendTemplate } from './whatsapp.js';
+import { senderFor, sendText, sendTemplate, resolveTemplate, recordFailed } from './whatsapp.js';
 import { appLink } from './bot.js';
 import { getTenant } from './tenants.js';
 
@@ -51,12 +51,13 @@ export async function deliverEvent(evt) {
 
   const { rows: [recent] } = await query(
     `SELECT 1 FROM messages WHERE participant_id=$1 AND direction='IN' AND created_at > now() - interval '23 hours' LIMIT 1`, [p.id]);
-  const tpl = sender.template(evt.type);
   if (recent || config.whatsapp.sendMode !== 'live') {
     await sendText({ tenantId: evt.tenant_id, participantId: p.id, to: p.mobile, text: msg.text });
     return 'sent-text';
   }
+  const tpl = await resolveTemplate(evt.tenant_id, evt.type); // testing report 3 #4
   if (!tpl) return 'no-template';
+  if (tpl.missing) { await recordFailed({ tenantId: evt.tenant_id, participantId: p.id, to: p.mobile, body: msg.text, error: tpl.error }); return 'no-template'; }
   await sendTemplate({ tenantId: evt.tenant_id, participantId: p.id, to: p.mobile, name: tpl.name, language: tpl.language || 'en', params: msg.params, previewText: msg.text });
   return 'sent-template';
 }

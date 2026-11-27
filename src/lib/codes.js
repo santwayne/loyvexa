@@ -24,7 +24,9 @@ export function extractCode(input) {
 export const formatCode = (c) => c.match(/.{1,4}/g).join('-');
 
 export const normalizeMobile = (m) => {
-  const d = String(m || '').replace(/\D/g, '');
+  let d = String(m || '').replace(/\D/g, '');
+  if (d.startsWith('00')) d = d.slice(2); // 0091… dialled-from-abroad form
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1); // 09814… trunk prefix
   if (d.length === 10) return `91${d}`;
   if (d.length === 12 && d.startsWith('91')) return d;
   return d.length >= 10 && d.length <= 15 ? d : null; // allow international numbers

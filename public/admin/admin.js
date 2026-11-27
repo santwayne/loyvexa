@@ -289,12 +289,12 @@ views.participants = async () => {
       <input type="file" id="pCsvFile" accept=".csv,.txt"><div id="pCsvOut" style="margin-top:10px"></div></div></div>
   <div class="panel"><div class="row"><div><input id="pq" placeholder="Search name, mobile, city" value="${esc(pQuery)}"></div><div style="flex:0;min-width:180px"><select id="pseg"><option value="">All segments</option>${['NEW', 'REGULAR', 'HIGH_SPENDER', 'AT_RISK', 'DORMANT'].map((x) => `<option ${x === pSeg ? 'selected' : ''}>${x}</option>`).join('')}</select></div><div style="flex:0"><button id="pqBtn">Search</button></div></div></div>
   <div class="panel"><table><tr><th>Name</th><th>Type</th><th>Segment</th><th>Mobile</th><th>City</th><th class="num">Balance</th><th class="num">Lifetime</th><th>Last scan</th><th>Status</th><th></th></tr>
-  ${participants.map((p) => `<tr><td>${esc(p.name || '—')}${p.dnd ? ' <span class="muted">· DND</span>' : ''}${p.wa_opt_out ? ' <span class="pill bad" title="Sent STOP on WhatsApp — gets no offers / campaigns">STOP</span>' : ''}</td><td>${esc(p.type)}</td><td>${p.segment ? `<span class="seg ${p.segment}">${p.segment.replace('_', ' ')}</span>` : '—'}</td><td>${esc(p.mobile)}</td><td>${esc(p.city || '—')}</td>
+  ${participants.map((p) => `<tr><td>${esc(p.name || '—')}${p.dnd ? ' <span class="muted">· DND</span>' : ''}${p.wa_opt_out ? ' <span class="pill bad" title="Sent STOP on WhatsApp — gets no offers / campaigns">STOP</span>' : p.wa_blocked_upstream ? ' <span class="pill bad" title="The last WhatsApp message failed because Loopdesk has this number on its STOP list">STOP in Loopdesk</span>' : ''}</td><td>${esc(p.type)}</td><td>${p.segment ? `<span class="seg ${p.segment}">${p.segment.replace('_', ' ')}</span>` : '—'}</td><td>${esc(p.mobile)}</td><td>${esc(p.city || '—')}</td>
     <td class="num">${num(p.balance)}</td><td class="num">${num(p.lifetime_earned)}</td><td>${dt(p.last_scan_at)}</td>
     <td>${p.status === 'ACTIVE' ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Blocked</span>'}</td>
     <td style="white-space:nowrap"><button class="sm ${p.status === 'ACTIVE' ? 'danger' : ''}" data-block="${p.id}" data-status="${p.status}">${p.status === 'ACTIVE' ? 'Block' : 'Unblock'}</button>
         <button class="sm" data-adj="${p.id}">± Points</button>
-        ${p.wa_opt_out ? `<button class="sm" data-waun="${p.id}" title="Clears STOP here and on the Loopdesk WhatsApp number">Unblock WhatsApp</button>` : ''}</td></tr>`).join('')}</table></div>`;
+        ${p.wa_opt_out || p.wa_blocked_upstream ? `<button class="sm" data-waun="${p.id}" title="Clears STOP here and on the Loopdesk WhatsApp number">Unblock WhatsApp</button>` : ''}</td></tr>`).join('')}</table></div>`;
   $('pShowAdd').onclick = () => { $('pAdd').classList.toggle('hidden'); $('pCsv').classList.add('hidden'); };
   $('pShowCsv').onclick = () => { $('pCsv').classList.toggle('hidden'); $('pAdd').classList.add('hidden'); };
   $('pTplCsv').onclick = () => {
@@ -324,7 +324,7 @@ views.participants = async () => {
     try {
       const r = await api('/api/admin/participants/import', { method: 'POST', body: { rows: body } });
       out.innerHTML = `<div class="panel" style="border-left:4px solid ${r.errors.length ? '#b45309' : '#15803d'};margin:0"><b>${r.total} rows read · ${r.created} added · ${r.duplicates} already registered · ${r.errors.length} with errors</b>
-        ${r.errors.length ? `<table style="margin-top:8px"><tr><th>Row</th><th>Mobile</th><th>Problem</th></tr>${r.errors.slice(0, 50).map((e) => `<tr><td>${e.row}</td><td>${esc(e.mobile)}</td><td>${esc(e.error)}</td></tr>`).join('')}</table>` : ''}
+        ${r.errors.length ? `<table style="margin-top:8px"><tr><th>Problem</th><th>Mobile in file</th></tr>${r.errors.slice(0, 50).map((e) => `<tr><td>${esc(e.error)}</td><td class="muted">${esc(e.mobile || '—')}</td></tr>`).join('')}</table>` : ''}
         <p style="margin:8px 0 0"><button class="sm" id="pCsvDone">Refresh list</button></p></div>`;
       $('pCsvDone').onclick = () => render();
     } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
@@ -692,8 +692,8 @@ views.calls = async () => {
   <div class="panel"><table><tr><th>Campaign</th><th>Audience</th><th>Status</th><th class="num">Calls</th><th>Outcomes</th><th></th></tr>
   ${campaigns.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="muted">${esc(c.script.replace('_', ' '))} · ${esc(c.language)}</div></td>
     <td class="muted">${esc([c.segments.join(', '), c.participant_types.join(', '), c.city].filter(Boolean).join(' · ') || 'Everyone')}</td>
-    <td>${c.stats.test ? '<span class="testbadge">TEST MODE</span> ' : ''}<span class="pill ${callPill(c.status)}">${c.status === 'CANCELLED' && c.note?.startsWith('Not started') ? 'NOT STARTED' : c.status}</span>${c.note ? `<div class="muted" style="max-width:260px">${esc(c.note)}</div>` : ''}</td>
-    <td class="num">${num(c.stats.completed)} / ${num(c.stats.total)}${c.stats.failed ? `<div class="muted" style="color:#c62828">${num(c.stats.failed)} failed</div>` : ''}</td>
+    <td>${c.status === 'TEST' ? '<span class="testbadge">TEST</span>' : `${c.stats.test ? '<span class="testbadge">TEST MODE</span> ' : ''}<span class="pill ${callPill(c.status)}">${c.status === 'CANCELLED' && c.note?.startsWith('Not started') ? 'NOT STARTED' : c.status}</span>`}${c.note ? `<div class="muted" style="max-width:260px">${esc(c.note)}</div>` : ''}</td>
+    <td class="num">${num(c.stats.completed)} / ${num(c.stats.total)}${c.stats.failed ? `<div class="muted" style="color:#c62828">${num(c.stats.failed)} failed${c.stats.notDialled ? ` (${num(c.stats.notDialled)} not dialled)` : ''}</div>` : ''}${c.stats.test ? `<div class="muted">${num(c.stats.test)} test</div>` : ''}</td>
     <td class="muted">${esc(Object.entries(c.stats.outcomes).map(([k, v]) => `${k.replace('_', ' ').toLowerCase()} ${v}`).join(' · ') || '—')}</td>
     <td><button class="sm" data-calls="${c.id}">Calls</button> ${['DRAFT', 'RUNNING'].includes(c.status) ? `<button class="sm danger" data-ccancel="${c.id}">Cancel</button>` : ''}</td></tr>`).join('')}</table></div><div id="callBox"></div>`;
   // Testing report #5: live "X people match" count; launch stays off at 0.
@@ -725,7 +725,7 @@ views.calls = async () => {
   document.querySelectorAll('[data-calls]').forEach((b) => b.onclick = async () => {
     const { calls } = await api(`/api/admin/call-campaigns/${b.dataset.calls}/calls`);
     $('callBox').innerHTML = `<div class="panel"><h3>Calls</h3><table><tr><th>Who</th><th>Segment</th><th>Status</th><th>Outcome</th><th>Summary</th></tr>
-      ${calls.map((k) => `<tr><td>${esc(k.name || '—')}<div class="muted">${esc(k.mobile)} · ${esc(k.city || '')}</div></td><td>${segPill(k.segment)}</td><td>${k.test_mode ? '<span class="testbadge">TEST MODE</span>' : `<span class="pill ${k.status === 'FAILED' ? 'bad' : k.status === 'COMPLETED' ? 'ok' : ''}">${esc(k.status)}</span>`}</td><td>${k.outcome ? `<span class="pill ${k.outcome === 'INTERESTED' ? 'ok' : ['WRONG_NUMBER', 'DO_NOT_CALL'].includes(k.outcome) ? 'bad' : ''}">${esc(k.outcome.replace('_', ' '))}</span>` : '—'}</td><td class="muted">${esc(k.summary || '')}</td></tr>`).join('')}</table>
+      ${calls.map((k) => `<tr><td>${esc(k.name || '—')}<div class="muted">${esc(k.mobile)} · ${esc(k.city || '')}</div></td><td>${segPill(k.segment)}</td><td>${k.test_mode || k.status === 'TEST' ? '<span class="testbadge">TEST</span>' : `<span class="pill ${k.status === 'FAILED' ? 'bad' : k.status === 'COMPLETED' ? 'ok' : ''}">${k.status === 'FAILED' && k.dial_failed ? 'FAILED – not dialled' : esc(k.status)}</span>`}${k.provider_call_id && !k.test_mode ? `<div class="muted" style="font-size:11px">WayneRing ID: ${esc(k.provider_call_id)}${k.provider_status ? `<br>Dial status: ${esc(k.provider_status)}` : ''}</div>` : ''}</td><td>${k.outcome ? `<span class="pill ${k.outcome === 'INTERESTED' ? 'ok' : ['WRONG_NUMBER', 'DO_NOT_CALL'].includes(k.outcome) ? 'bad' : ''}">${esc(k.outcome.replace('_', ' '))}</span>` : '—'}</td><td class="muted">${esc(k.summary || '')}</td></tr>`).join('')}</table>
       ${calls[0] ? `<p class="muted" style="margin-top:12px">Opening line: “${esc(calls[0].first_message)}”</p>` : ''}</div>`;
     $('callBox').scrollIntoView({ behavior: 'smooth' });
   });

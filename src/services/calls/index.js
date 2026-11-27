@@ -42,11 +42,12 @@ export async function launchCampaign({ tenantId, campaignId }) {
     for (const p of people) {
       if (p.dnd) { dnd++; continue; }
       const { rows: [recent] } = await db.query(
-        `SELECT 1 FROM calls WHERE participant_id=$1 AND status <> 'SKIPPED' AND created_at > now() - make_interval(days => $2) LIMIT 1`, [p.id, s.callCooldownDays]);
+        `SELECT 1 FROM calls WHERE participant_id=$1 AND status NOT IN ('SKIPPED','TEST','FAILED') AND created_at > now() - make_interval(days => $2) LIMIT 1`, [p.id, s.callCooldownDays]);
       if (recent) { cooldown++; continue; }
       const w = await ledger.getWallet(db, p.id);
       const schemes = await progressFor({ tenant, participant: p });
       const vars = { name: p.name || '', brand: tenant.name, balance: w.balance.toLocaleString('en-IN'), scheme: schemeLine(schemes, c.language), city: p.city || '' };
+      vars.scheme_progress = vars.scheme; // testing report 3 #7: same variable names as WhatsApp campaigns
       await db.query(`INSERT INTO calls (tenant_id, campaign_id, participant_id, context) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
         [tenantId, c.id, p.id, { vars, ...buildScript({ script: c.script, language: c.language, vars }) }]);
       queued++;
@@ -90,10 +91,13 @@ export async function dispatchDue({ limit = 20, now = new Date() } = {}) {
       }
       try {
         const out = await getCallProvider(k.provider).startCall({ callId: k.id, to: k.mobile, language: k.language, firstMessage: k.context.firstMessage, instructions: k.context.instructions, variables: k.context.vars });
-        await client.query(`UPDATE calls SET status='DIALING', provider_call_id=$2, attempted_at=now(), summary=$3, test_mode=$4 WHERE id=$1`, [k.id, out.providerCallId, k.provider === 'mock' ? 'TEST MODE — WayneRing was not called (CALL_PROVIDER=mock)' : null, k.provider === 'mock']);
+        await client.query(`UPDATE calls SET status='DIALING', provider_call_id=$2, attempted_at=now(), summary=$3, test_mode=$4, provider_status=$5 WHERE id=$1`,
+          [k.id, out.providerCallId, k.provider === 'mock' ? 'TEST MODE — WayneRing was not called (CALL_PROVIDER=mock)' : `Sent to WayneRing (call ID ${out.providerCallId}) — waiting for the result`, k.provider === 'mock', out.providerStatus || null]);
         if (out.result) results.push({ callId: k.id, ...out.result });
       } catch (e) {
-        await client.query(`UPDATE calls SET status='FAILED', summary=$2, attempted_at=now(), completed_at=now() WHERE id=$1`, [k.id, `WayneRing error: ${e.message}`.slice(0, 300)]);
+        // Testing report 3 #1: a call WayneRing never placed is FAILED – not dialled, with the reason.
+        await client.query(`UPDATE calls SET status='FAILED', dial_failed=true, summary=$2, provider_call_id=coalesce($3, provider_call_id), provider_status=$4, attempted_at=now(), completed_at=now() WHERE id=$1`,
+          [k.id, `FAILED – not dialled: ${e.message.replace(/^not dialled — /, '')}`.slice(0, 300), e.providerCallId || null, e.providerStatus || 'start-error']);
       }
       n++;
     }
@@ -102,51 +106,79 @@ export async function dispatchDue({ limit = 20, now = new Date() } = {}) {
   } catch (e) {
     await client.query('ROLLBACK'); throw e;
   } finally { client.release(); }
+  await expireSilentCalls({ now });
   await completeFinishedCampaigns();
   return n;
 }
 
-/** Outcome from provider (sync or webhook). Idempotent. Calls never change points. */
-export async function settleCall({ callId, providerCallId, outcome, summary, failed, testMode }) {
+/**
+ * Outcome from provider (sync or webhook). Idempotent. Calls never change points.
+ * Testing report 3 #1: `notDialled` (WayneRing never rang the phone) → FAILED – not dialled + reason,
+ * never NO_ANSWER. Testing report 3 #6: a test call is status TEST, never COMPLETED.
+ */
+export async function settleCall({ callId, providerCallId, outcome, summary, failed, notDialled, reason, providerStatus, raw, testMode }) {
   return tx(async (db) => {
     const { rows: [k] } = await db.query(
       `SELECT * FROM calls WHERE ${callId ? 'id=$1' : 'provider_call_id=$1'} FOR UPDATE`, [callId || providerCallId]);
     if (!k) throw notFound('Call');
-    if (['COMPLETED', 'FAILED'].includes(k.status)) return k;
-    // Test mode with no outcome: nobody was called, so no outcome, no DND, no event.
-    if ((testMode || k.test_mode) && !outcome) {
-      const { rows: [u] } = await db.query(`UPDATE calls SET status='COMPLETED', outcome=NULL, summary=$2, test_mode=true, completed_at=now() WHERE id=$1 RETURNING *`, [k.id, summary || 'TEST MODE — no real call was placed']);
+    if (['COMPLETED', 'FAILED', 'TEST'].includes(k.status)) return k;
+    if (testMode || k.test_mode) {
+      const { rows: [u] } = await db.query(`UPDATE calls SET status='TEST', outcome=$3, summary=$2, test_mode=true, completed_at=now() WHERE id=$1 RETURNING *`,
+        [k.id, summary || 'TEST MODE — no real call was placed', OUTCOMES.includes(outcome) ? outcome : null]);
+      return u;
+    }
+    if (failed) {
+      const why = notDialled ? `FAILED – not dialled: ${reason || 'WayneRing did not place the call'}` : `FAILED: ${reason || 'WayneRing reported a failure'}`;
+      const { rows: [u] } = await db.query(
+        `UPDATE calls SET status='FAILED', outcome=NULL, dial_failed=$3, summary=$2, provider_status=coalesce($4, provider_status), provider_detail=coalesce($5, provider_detail), completed_at=now() WHERE id=$1 RETURNING *`,
+        [k.id, `${why}${summary ? ` · WayneRing: ${summary}` : ''}`.slice(0, 500), !!notDialled, providerStatus || null, raw || null]);
       return u;
     }
     const oc = OUTCOMES.includes(outcome) ? outcome : 'NO_ANSWER';
     const { rows: [u] } = await db.query(
-      `UPDATE calls SET status=$2, outcome=$3, summary=$4, completed_at=now() WHERE id=$1 RETURNING *`, [k.id, failed ? 'FAILED' : 'COMPLETED', failed ? null : oc, summary || null]);
+      `UPDATE calls SET status='COMPLETED', outcome=$2, summary=$3, provider_status=coalesce($4, provider_status), provider_detail=coalesce($5, provider_detail), completed_at=now() WHERE id=$1 RETURNING *`,
+      [k.id, oc, summary || null, providerStatus || null, raw || null]);
     if (oc === 'DO_NOT_CALL') await db.query(`UPDATE participants SET dnd=true WHERE id=$1`, [k.participant_id]);
     await emit(db, k.tenant_id, 'call.completed', { callId: k.id, campaignId: k.campaign_id, participantId: k.participant_id, outcome: oc });
     return u;
   });
 }
 
+/**
+ * Testing report 3 #1: WayneRing took the call but never reported back → it was most likely never
+ * dialled. After CALL_RESULT_TIMEOUT_MIN (default 20) a DIALING call becomes FAILED – not dialled.
+ */
+export async function expireSilentCalls({ now = new Date() } = {}) {
+  const mins = Number(process.env.CALL_RESULT_TIMEOUT_MIN || 20);
+  await query(`UPDATE calls SET status='FAILED', dial_failed=true, completed_at=now(),
+                      summary='FAILED – not dialled: WayneRing sent no result within ' || $2::int || ' minutes' || coalesce(' (WayneRing call ID ' || provider_call_id || ')', '')
+                WHERE status='DIALING' AND NOT test_mode AND attempted_at < $1::timestamptz - make_interval(mins => $2::int)`, [now, mins]);
+}
+
 // Testing report 2 #5: if every call failed the campaign is FAILED (with the first reason), not COMPLETED.
+// Testing report 3 #6: if every call was a test call, the campaign is TEST, not COMPLETED.
 export async function completeFinishedCampaigns() {
   await query(`UPDATE call_campaigns c SET
-                  status = CASE WHEN EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='FAILED')
+                  status = CASE WHEN NOT EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status IN ('COMPLETED','FAILED'))
+                                 AND EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='TEST') THEN 'TEST'
+                                WHEN EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='FAILED')
                                  AND NOT EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='COMPLETED') THEN 'FAILED' ELSE 'COMPLETED' END,
-                  note = CASE WHEN EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='FAILED')
+                  note = CASE WHEN NOT EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status IN ('COMPLETED','FAILED'))
+                                 AND EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='TEST') THEN 'TEST MODE — no real calls were placed (CALL_PROVIDER=mock)'
+                              WHEN EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='FAILED')
                                  AND NOT EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status='COMPLETED')
                               THEN 'All calls failed: ' || coalesce((SELECT k.summary FROM calls k WHERE k.campaign_id=c.id AND k.status='FAILED' AND k.summary IS NOT NULL LIMIT 1), 'see the calls list')
-                              WHEN EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.test_mode) THEN 'TEST MODE — no real calls were placed (CALL_PROVIDER=mock)'
                               ELSE c.note END,
                   completed_at=now()
                 WHERE status='RUNNING' AND NOT EXISTS (SELECT 1 FROM calls k WHERE k.campaign_id=c.id AND k.status IN ('QUEUED','DIALING'))`);
 }
 
 export async function campaignStats(campaignId) {
-  const { rows } = await query(`SELECT status, outcome, test_mode, count(*)::int AS n FROM calls WHERE campaign_id=$1 GROUP BY 1,2,3`, [campaignId]);
-  const s = { total: 0, queued: 0, dialing: 0, completed: 0, failed: 0, test: 0, outcomes: {} };
+  const { rows } = await query(`SELECT status, outcome, test_mode, dial_failed, count(*)::int AS n FROM calls WHERE campaign_id=$1 GROUP BY 1,2,3,4`, [campaignId]);
+  const s = { total: 0, queued: 0, dialing: 0, completed: 0, failed: 0, notDialled: 0, test: 0, outcomes: {} };
   for (const r of rows) {
     s.total += r.n; s[r.status.toLowerCase()] = (s[r.status.toLowerCase()] || 0) + r.n;
-    if (r.test_mode) s.test += r.n;
+    if (r.dial_failed) s.notDialled += r.n;
     if (r.outcome) s.outcomes[r.outcome] = (s.outcomes[r.outcome] || 0) + r.n;
   }
   return s;

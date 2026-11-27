@@ -145,14 +145,43 @@ r.get('/participants', ah(async (req, res) => {
   params.push(limit, offset);
   const { rows } = await query(`
     SELECT p.id, p.type, p.name, p.mobile, p.city, p.state, p.status, p.upi_id, p.last_scan_at, p.last_purchase_at, p.created_at, p.external_ref, p.segment, p.dnd, p.wa_opt_out,
+           -- Testing report 3 #3: Loopdesk still has them on its STOP list (last message failed for that reason)
+           coalesce((SELECT m.status = 'FAILED' AND m.error ~* '(sent stop|opted.?out|stop to the business)' FROM messages m
+                      WHERE m.participant_id = p.id AND m.direction = 'OUT' AND m.status <> 'MOCK' ORDER BY m.created_at DESC LIMIT 1), false) AS wa_blocked_upstream,
            coalesce(w.balance,0) AS balance, coalesce(w.lifetime_earned,0) AS lifetime_earned, count(*) OVER() AS total
       FROM participants p LEFT JOIN wallets w ON w.participant_id=p.id
      WHERE ${where.join(' AND ')} ORDER BY p.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
   res.json({ participants: rows, total: Number(rows[0]?.total || 0) });
 }));
+/**
+ * Testing report 3 #8: plain-language reasons instead of "mobile: Invalid input: expected string,
+ * received undefined". Returns null when the mobile is fine.
+ */
+export function mobileProblem(raw) {
+  const v = String(raw ?? '').trim();
+  if (!v) return 'mobile number khali hai';
+  if (/^\d+(\.\d+)?e\+?\d+$/i.test(v)) return `Excel ne number bigaad diya (${v}) — mobile column ko Text format karke dobara save karo`;
+  if (!normalizeMobile(v)) return `mobile number galat hai: "${v}" (10 digit ka number likho, jaise 9814000101)`;
+  return null;
+}
+function rowProblem(raw, issues) {
+  const out = [];
+  const mp = mobileProblem(raw.mobile);
+  if (mp) out.push(mp);
+  const order = ['name', 'type'];
+  const sorted = [...issues].sort((x, y) => (order.indexOf(x.path[0]) + 1 || 9) - (order.indexOf(y.path[0]) + 1 || 9));
+  for (const x of sorted) {
+    const f = x.path[0];
+    if (f === 'mobile') continue;
+    if (f === 'name') out.push('naam khali hai');
+    else if (f === 'type') out.push(`type galat hai: "${raw.type}" (${PTYPES.join(', ')} mein se ek likho, ya khali chhodo = DEALER)`);
+    else out.push(`${f || 'row'}: ${x.message}`);
+  }
+  return [...new Set(out)].join('; ');
+}
 async function createParticipant(db, tenantId, b, source) {
   const mobile = normalizeMobile(b.mobile);
-  if (!mobile) throw badRequest('INVALID_MOBILE', `Invalid mobile number: ${b.mobile}`);
+  if (!mobile) throw badRequest('INVALID_MOBILE', mobileProblem(b.mobile));
   if (b.upiId && !isValidUpi(b.upiId)) throw badRequest('INVALID_UPI', 'Invalid UPI ID');
   const city = await cityFor(tenantId, b.city);
   try {
@@ -189,11 +218,12 @@ r.post('/participants/import', ah(async (req, res) => {
     for (const [i, raw] of rows.entries()) {
       const row = { ...raw, type: String(raw.type || 'DEALER').trim().toUpperCase() };
       const ok = participantSchema.safeParse(Object.fromEntries(Object.entries(row).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, String(v).trim()])));
-      if (!ok.success) { out.errors.push({ row: i + 2, mobile: raw.mobile || '', error: ok.error.issues.map((x) => `${x.path.join('.') || 'row'}: ${x.message}`).join('; ') }); continue; }
+      const mp = mobileProblem(raw.mobile);
+      if (!ok.success || mp) { out.errors.push({ row: i + 2, mobile: raw.mobile || '', error: `Row ${i + 2}: ${rowProblem(row, ok.success ? [] : ok.error.issues)}` }); continue; }
       try { await createParticipant(db, req.tenantId, ok.data, 'admin_import'); out.created++; }
       catch (e) {
         if (e.code === 'MOBILE_EXISTS') out.duplicates++;
-        else out.errors.push({ row: i + 2, mobile: raw.mobile || '', error: e.message });
+        else out.errors.push({ row: i + 2, mobile: raw.mobile || '', error: `Row ${i + 2}: ${e.message}` });
       }
     }
   });

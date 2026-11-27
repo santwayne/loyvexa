@@ -93,12 +93,15 @@ ok('call campaign: 3 dormant mechanics queued, DND skipped; Hindi script persona
 await must(api('POST', '/api/admin/call-campaigns/dispatch', { token: A }));
 const list = await must(api('GET', '/api/admin/call-campaigns', { token: A }));
 const st = list.campaigns.find((c) => c.id === cc.id);
-assert.equal(st.status, 'COMPLETED'); assert.equal(st.stats.completed, 3);
+// Testing report 3 #6: simulated calls are TEST, never COMPLETED (outcomes only with CALL_MOCK_OUTCOMES=1)
+assert.equal(st.status, 'TEST'); assert.equal(st.stats.test, 3);
 assert.deepEqual(st.stats.outcomes, { INTERESTED: 1, NOT_INTERESTED: 1, WRONG_NUMBER: 1 });
 const walletsAfter = await q(`SELECT sum(balance)::int s FROM wallets WHERE tenant_id=(SELECT id FROM tenants WHERE slug=$1)`, [slug]);
 assert.equal(walletsAfter[0].s, walletsBefore[0].s);
 ok('dialled via provider: outcomes recorded, campaign completed, points untouched');
 
+// Test calls never block a real call (testing report 3 #6), so make these count as real calls first.
+await q(`UPDATE calls SET status='COMPLETED', test_mode=false WHERE campaign_id=$1`, [cc.id]);
 const { campaign: cc2 } = await must(api('POST', '/api/admin/call-campaigns', { token: A, body: { name: 'Again', script: 'SCHEME_REMINDER', segments: ['DORMANT'], participantTypes: ['MECHANIC'] } }), 201);
 const l2 = await must(api('POST', `/api/admin/call-campaigns/${cc2.id}/launch`, { token: A }));
 assert.equal(l2.queued, 0); assert.equal(l2.skipped.cooldown, 3);

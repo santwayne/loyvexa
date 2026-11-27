@@ -80,7 +80,7 @@ r.post('/call-campaigns/:id/cancel', adminOnly, ah(async (req, res) => {
 }));
 r.get('/call-campaigns/:id/calls', ah(async (req, res) => {
   const { rows } = await query(`
-    SELECT k.id, k.status, k.outcome, k.summary, k.test_mode, k.attempted_at, k.completed_at, k.context->>'firstMessage' AS first_message,
+    SELECT k.id, k.status, k.outcome, k.summary, k.test_mode, k.dial_failed, k.provider_call_id, k.provider_status, k.attempted_at, k.completed_at, k.context->>'firstMessage' AS first_message,
            p.name, p.mobile, p.type, p.city, p.segment
       FROM calls k JOIN participants p ON p.id=k.participant_id WHERE k.campaign_id=$1 AND k.tenant_id=$2 ORDER BY k.created_at`, [req.params.id, req.tenantId]);
   res.json({ calls: rows });

@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { decrypt, safeEqual } from '../lib/crypto.js';
 import { waViaRegulars } from './bundle.js';
 import { badRequest } from '../lib/errors.js';
+import { normalizeMobile } from '../lib/codes.js';
 
 /**
  * WhatsApp Cloud API sender. One number per brand (tenant_channels).
@@ -37,7 +38,7 @@ export async function senderFor(tenantId) {
   const template = (key) => {
     const own = key === 'otp' ? channel?.config?.otpTemplate : channel?.config?.templates?.[key];
     if (own) return typeof own === 'string' ? { name: own } : own;
-    return viaRegulars ? { name: regularsTemplateName(key), language: 'en' } : null;
+    return viaRegulars ? { name: regularsTemplateName(key), language: config.whatsapp.templateLanguage || 'en', guessed: true } : null;
   };
   return { viaRegulars, ready: viaRegulars || !!channel, template };
 }
@@ -81,6 +82,7 @@ export function metaError(json, httpStatus) {
  */
 export async function checkChannel(tenantId) {
   const out = { sendMode: config.whatsapp.sendMode, problems: [] };
+  clearTemplateCache();
   if (config.whatsapp.sendMode !== 'live') out.problems.push('Server is in MOCK mode: replies are saved in the log but never sent. Set WHATSAPP_SEND_MODE=live on the Loyvexa server and restart.');
   const { rows: [tenant] } = await query(`SELECT id, hub_business_id FROM tenants WHERE id=$1`, [tenantId]);
   out.viaRegulars = waViaRegulars(tenant);
@@ -104,6 +106,11 @@ export async function checkChannel(tenantId) {
   const lastErr = rows.find((r) => r.last_error)?.last_error;
   if (lastErr) out.problems.push(`Last failed send: ${lastErr}`);
   if (out.last24h.SENT && !out.last24h.DELIVERED && !out.last24h.READ && !out.viaRegulars) out.problems.push('Messages left the server (SENT) but Meta never reported DELIVERED. Check that the webhook URL below is subscribed to the "messages" field in Meta, and that the recipient is in the allowed list while the app is in development mode.');
+  if (config.whatsapp.sendMode === 'live') {
+    const missing = [];
+    for (const key of TEMPLATE_KEYS) { const t = await resolveTemplate(tenantId, key).catch(() => null); if (t?.missing) missing.push(`${t.name} (${key})`); }
+    if (missing.length) out.problems.push(`These templates are not approved, so those messages cannot be sent: ${missing.join(', ')}.`);
+  }
   out.ok = out.problems.length === 0;
   return out;
 }
@@ -164,7 +171,32 @@ export async function syncOptIn(tenantId, to, optIn) {
   } catch (e) { return { ok: false, error: `Could not reach Loopdesk: ${e.message}` }; }
 }
 
-async function send({ tenantId, participantId, to, body, payload }) {
+/**
+ * Testing report 3 #5: always send to the full number with country code. A reply to "9814000102"
+ * (no 91) is read by Meta as another country's number that never messaged us, and fails with
+ * "Re-engagement message" even though the dealer wrote a minute ago.
+ */
+export const waNumber = (to) => normalizeMobile(to) || String(to || '').replace(/\D/g, '');
+
+/** Makes a failed send's reason actionable (testing report 3 #3 and #5). */
+async function explain(tenantId, to, message) {
+  const msg = String(message || '');
+  if (/re-?engagement|131047|24 ?hours?/i.test(msg)) {
+    const { rows: [last] } = await query(`SELECT created_at FROM messages WHERE tenant_id=$1 AND peer=$2 AND direction='IN' ORDER BY created_at DESC LIMIT 1`, [tenantId, to]);
+    const ago = last ? (Date.now() - new Date(last.created_at).getTime()) / 3600e3 : null;
+    const when = last ? new Date(last.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : null;
+    return ago != null && ago < 24
+      ? `${msg} → +${to} last messaged at ${when} (${ago < 1 ? 'under an hour' : `${Math.floor(ago)} h`} ago), so the 24-hour window was open. The reply went out from a different WhatsApp number than the one this person wrote to — check that Loopdesk sends Loyvexa replies from this business's own number.`
+      : `${msg} → ${last ? `+${to} last messaged at ${when}, more than 24 hours ago` : `+${to} has never messaged this number`}: only an approved template can be sent.`;
+  }
+  if (/sent stop|opted.?out|stop to the business/i.test(msg)) {
+    return `${msg} → Loopdesk still has +${to} on its STOP list. If they sent START, Loopdesk's opt-in did not go through: use Participants → "Unblock WhatsApp".`;
+  }
+  return msg;
+}
+
+async function send({ tenantId, participantId, to: rawTo, body, payload }) {
+  const to = waNumber(rawTo);
   const { rows: [tenant] } = await query(`SELECT id, hub_business_id FROM tenants WHERE id=$1`, [tenantId]);
   if (waViaRegulars(tenant)) {
     if (config.whatsapp.sendMode !== 'live') return record({ tenantId, participantId, to, body, payload, status: 'MOCK' });
@@ -172,7 +204,7 @@ async function send({ tenantId, participantId, to, body, payload }) {
       const id = await regularsSend(tenant, to, payload);
       return record({ tenantId, participantId, to, body, payload, status: 'SENT', providerMsgId: id });
     } catch (e) {
-      return record({ tenantId, participantId, to, body, payload, status: 'FAILED', error: e.message });
+      return record({ tenantId, participantId, to, body, payload, status: 'FAILED', error: await explain(tenantId, to, e.message) });
     }
   }
   const channel = await channelForTenant(tenantId);
@@ -183,9 +215,13 @@ async function send({ tenantId, participantId, to, body, payload }) {
     const id = await graphSend(channel, { to, ...payload });
     return record({ tenantId, participantId, to, body, payload, status: 'SENT', providerMsgId: id });
   } catch (e) {
-    return record({ tenantId, participantId, to, body, payload, status: 'FAILED', error: e.message });
+    return record({ tenantId, participantId, to, body, payload, status: 'FAILED', error: await explain(tenantId, to, e.message) });
   }
 }
+
+/** A message that was not sent at all (e.g. its template is not approved), kept with the reason. */
+export const recordFailed = ({ tenantId, participantId, to, body, error }) =>
+  record({ tenantId, participantId, to: waNumber(to), body, status: 'FAILED', error });
 
 export const sendText = ({ tenantId, participantId, to, text }) =>
   send({ tenantId, participantId, to, body: text, payload: { type: 'text', text: { body: text, preview_url: true } } });
@@ -276,4 +312,46 @@ export async function assertApprovedTemplate(tenantId, name, language) {
     throw badRequest('TEMPLATE_NOT_APPROVED', `Template "${name}" is not approved on WhatsApp, so the campaign was not created.${why}`);
   }
   return t;
+}
+
+/**
+ * Testing report 3 #4: every welcome message failed with "(#132001) Template name does not exist in
+ * the translation" — Loyvexa guessed the name loyvexa_participant_created in language "en", which
+ * did not match the template in Meta. Now the template is looked up in the approved list
+ * (Loopdesk or Meta) by name and its real language code is used (hi, en, en_US…). If it is not
+ * approved, nothing is sent to Meta and the message is kept as FAILED with the exact fix.
+ *
+ * Per brand override: tenants.settings.waTemplates = { "participant.created": { name, language } }.
+ * Returns null (no template configured), { name, language } or { missing: true, name, error }.
+ */
+const TEMPLATE_ALIASES = { 'participant.created': ['loyvexa_welcome', 'loyvexa_participant_welcome', 'welcome'] };
+export const TEMPLATE_KEYS = ['participant.created', 'otp', 'redemption.paid', 'redemption.failed', 'redemption.rejected', 'scheme.bonus', 'purchase.recorded', 'order.sent', 'order.failed', 'points.expiring', 'ai.slab', 'ai.mechanic'];
+const approvedCache = new Map();
+async function approvedTemplates(tenantId) {
+  const hit = approvedCache.get(tenantId);
+  if (hit && Date.now() - hit.at < 10 * 60e3) return hit.list;
+  const list = await listTemplates(tenantId).catch((e) => ({ source: 'error', templates: [], note: e.message }));
+  approvedCache.set(tenantId, { at: Date.now(), list });
+  return list;
+}
+export const clearTemplateCache = () => approvedCache.clear();
+
+export async function resolveTemplate(tenantId, key) {
+  const { rows: [tenant] } = await query(`SELECT settings FROM tenants WHERE id=$1`, [tenantId]);
+  const sender = await senderFor(tenantId);
+  const override = tenant?.settings?.waTemplates?.[key];
+  const want = override ? (typeof override === 'string' ? { name: override } : override) : sender.template(key);
+  if (!want?.name) return null;
+  if (config.whatsapp.sendMode !== 'live') return { name: want.name, language: want.language || 'en' };
+  const list = await approvedTemplates(tenantId);
+  if (!['loopdesk', 'meta'].includes(list.source)) return { name: want.name, language: want.language || 'en' }; // cannot verify: send as configured
+  const names = [want.name, ...((!override && want.guessed && TEMPLATE_ALIASES[key]) || [])];
+  const match = list.templates.find((t) => t.name === want.name && (!want.language || t.language === want.language))
+    || names.map((n) => list.templates.find((t) => t.name === n)).find(Boolean);
+  if (match) return { name: match.name, language: match.language || want.language || 'en' };
+  const where = list.source === 'loopdesk' ? 'Loopdesk → WhatsApp templates' : 'Meta → WhatsApp Manager → Message templates';
+  return {
+    missing: true, name: want.name,
+    error: `Not sent: template "${want.name}" is not approved on WhatsApp (#132001 avoided). Create it in ${where} and get it approved${list.templates.length ? `, or set this brand's waTemplates["${key}"] to one of: ${list.templates.map((t) => `${t.name} (${t.language})`).join(', ')}` : ''}.`,
+  };
 }

@@ -20,6 +20,8 @@ export const config = {
     verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || 'dev-verify-token',
     appSecret: process.env.WHATSAPP_APP_SECRET || '',     // enables X-Hub-Signature-256 check
     graphVersion: process.env.WHATSAPP_GRAPH_VERSION || 'v21.0',
+    // Language code used for Loopdesk templates when their approved list cannot be read (hi, en, en_US…)
+    templateLanguage: process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
   },
   calls: {
     provider: process.env.CALL_PROVIDER || 'mock', // mock | waynering

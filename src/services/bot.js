@@ -147,13 +147,15 @@ export async function handleInbound({ channel, from, text, providerMsgId }) {
   // The brand's owner / sales head approving the AI's plan ("1 3", "ALL", "SKIP", "PLAN").
   const ownerReply = await handleOwnerMessage({ tenant, mobile, text });
   if (ownerReply) {
-    await sendText({ tenantId: tenant.id, to: from, text: ownerReply });
+    await sendText({ tenantId: tenant.id, to: mobile || from, text: ownerReply });
     return ownerReply;
   }
 
   const { rows: [p] } = await query(`SELECT * FROM participants WHERE tenant_id=$1 AND mobile=$2`, [tenant.id, mobile]);
   if (p) await query(`UPDATE messages SET participant_id=$1 WHERE id=$2`, [p.id, ins.rows[0]?.id]);
-  const reply = (t) => sendText({ tenantId: tenant.id, participantId: p?.id, to: from, text: t }).then(() => t);
+  // Testing report 3 #5: reply to the normalised number (91…), never the raw "from" (a 10-digit
+  // number is read by Meta as another country and fails with "Re-engagement message").
+  const reply = (t) => sendText({ tenantId: tenant.id, participantId: p?.id, to: mobile || from, text: t }).then(() => t);
 
   if (!p) return reply(L.hi.notRegistered(tenant.name, appLink(tenant)));
   let lang = p.language === 'en' ? 'en' : 'hi';
@@ -169,9 +171,13 @@ export async function handleInbound({ channel, from, text, providerMsgId }) {
   if (it === 'STOP') { await query(`UPDATE participants SET wa_opt_out=true WHERE id=$1`, [p.id]); await syncOptIn(tenant.id, mobile, false); return reply(l().stop); }
   if (it === 'START') {
     await query(`UPDATE participants SET wa_opt_out=false WHERE id=$1`, [p.id]);
-    const sync = await syncOptIn(tenant.id, mobile, true);
+    // Testing report 3 #3: Loopdesk must drop the STOP before the reply goes out. One retry on failure.
+    let sync = await syncOptIn(tenant.id, mobile, true);
+    if (!sync.ok) { await new Promise((r) => setTimeout(r, 1500)); sync = await syncOptIn(tenant.id, mobile, true); }
     if (!sync.ok) console.warn(`[wa] START for ${mobile}: Loopdesk opt-in failed — ${sync.error}`);
-    return reply(l().start);
+    const m = await sendText({ tenantId: tenant.id, participantId: p.id, to: mobile, text: l().start });
+    if (m.status === 'FAILED' && !sync.ok) await query(`UPDATE messages SET error = error || $2 WHERE id=$1`, [m.id, ` (Loopdesk opt-in: ${sync.error})`]);
+    return l().start;
   }
 
   // Ordering: "order" shows the catalog; while a cart is open, "<item> <qty>", cart, confirm, cancel

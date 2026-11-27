@@ -48,7 +48,8 @@ async function varsFor(tenant, p) {
   const schemes = await progressFor({ tenant, participant: p });
   const s = schemes.find((x) => x.progress);
   const scheme_progress = s ? progressLine(s, p.language === 'en' ? 'en' : 'hi') : '';
-  return { name: p.name || '', brand: tenant.name, balance: w.balance.toLocaleString('en-IN'), scheme_progress, app_link: appLink(tenant) };
+  // Testing report 3 #7: {scheme} works too (same name as in call scripts).
+  return { name: p.name || '', brand: tenant.name, balance: w.balance.toLocaleString('en-IN'), scheme_progress, scheme: scheme_progress, app_link: appLink(tenant) };
 }
 
 /** Worker: send queued campaign messages within per-tick and per-day limits. */
