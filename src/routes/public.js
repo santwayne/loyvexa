@@ -43,6 +43,8 @@ r.post('/api/webhooks/payouts/:provider', ah(async (req, res) => {
 r.post('/api/webhooks/calls/:provider', ah(async (req, res) => {
   let p; try { p = getCallProvider(req.params.provider); } catch { return res.status(404).json({ ok: false }); }
   const evt = p.parseWebhook(req);
+  // Testing report 3 #1: log WayneRing's call ID and real dial status for every report.
+  console.log(`[calls] webhook ${req.params.provider} loyvexa=${evt?.callId || '—'} waynering_id=${evt?.providerCallId || '—'} status=${evt?.providerStatus || '—'} outcome=${evt?.outcome || '—'}${evt?.failed ? ` FAILED${evt.notDialled ? ' (not dialled)' : ''}: ${evt.reason}` : ''}`);
   if (!evt || !(evt.callId || evt.providerCallId)) return res.status(400).json({ ok: false });
   await settleCall(evt);
   res.json({ ok: true });

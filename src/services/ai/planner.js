@@ -218,7 +218,7 @@ export async function planTenant(tenant, now = new Date()) {
         const { rows: [{ n }] } = await query(`
           SELECT ((SELECT count(*) FROM ai_actions WHERE participant_id=$1 AND status='DONE' AND executed_at > $2::timestamptz - interval '7 days')
                 + (SELECT count(*) FROM wa_campaign_recipients r JOIN messages m ON m.id=r.message_id WHERE r.participant_id=$1 AND m.created_at > $2::timestamptz - interval '7 days')
-                + (SELECT count(*) FROM calls WHERE participant_id=$1 AND status <> 'SKIPPED' AND created_at > $2::timestamptz - interval '7 days'))::int AS n`, [p.id, now]);
+                + (SELECT count(*) FROM calls WHERE participant_id=$1 AND status NOT IN ('SKIPPED','TEST','FAILED') AND created_at > $2::timestamptz - interval '7 days'))::int AS n`, [p.id, now]);
         if (n >= s.aiMaxTouchesPerWeek) { skipped.weeklyLimit++; continue; }
       }
       seen.add(p.id);
