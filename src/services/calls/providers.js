@@ -45,7 +45,10 @@ const num = (v) => (v == null || v === '' ? null : Number(v));
 export function classifyCallReport(b = {}) {
   const outcome = String(b.outcome || b.disposition || b.result?.outcome || '').toUpperCase().replace(/[\s-]+/g, '_');
   const status = String(b.status || b.call_status || b.callStatus || '').toLowerCase();
-  const ended = String(b.ended_reason || b.endedReason || b.end_reason || b.hangup_cause || b.hangupCause || b.dial_status || b.dialStatus || '').toLowerCase();
+  const endedRaw = String(b.ended_reason || b.endedReason || b.end_reason || b.hangup_cause || b.hangupCause || b.dial_status || b.dialStatus || '');
+  const ended = endedRaw.toLowerCase();
+  // WayneRing (Nov 2026) also sends Plivo's own hangup cause: the clearest reason to show.
+  const cause = String(b.hangup_cause || b.hangupCause || '').trim() || endedRaw.replace(/^not[-_ ]?dialled:\s*/i, '');
   const duration = num(b.duration_seconds ?? b.durationSeconds ?? b.duration ?? b.call_duration ?? b.billsec);
   const answered = b.answered === true || !!(b.answered_at || b.answeredAt);
   const errorText = b.error?.message || b.error_message || b.errorMessage || (typeof b.error === 'string' ? b.error : '') || '';
@@ -54,7 +57,7 @@ export function classifyCallReport(b = {}) {
 
   const explicitFail = ['failed', 'error', 'not_dialled', 'not-dialled', 'not_dialed', 'canceled', 'cancelled', 'rejected'].includes(status);
   if (explicitFail || (ended && NOT_DIALLED.test(ended) && !RANG_NO_PICKUP.test(ended)) || errorText) {
-    return { outcome: null, failed: true, notDialled: !answered && !(duration > 0), providerStatus, reason: errorText || ended || status || 'WayneRing reported a failure', summary };
+    return { outcome: null, failed: true, notDialled: !answered && !(duration > 0), providerStatus, reason: errorText || cause || status || 'WayneRing reported a failure', summary };
   }
   if (outcome && outcome !== 'NO_ANSWER') return { outcome, failed: false, notDialled: false, providerStatus, summary };
   // NO_ANSWER (or no outcome at all) only stands when there is proof that the phone rang.
