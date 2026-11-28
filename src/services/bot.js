@@ -135,6 +135,9 @@ export function schemesText(lang, schemes) {
   return parts.join('\n');
 }
 
+/** A Regulars / Loopdesk QR scan ("JOIN 9H75JS", "JOIN 9H75JS T5 REF AB12"). */
+export const isOtherProductJoin = (text) => /^\s*join\s+[a-z0-9]{4,12}\b/i.test(String(text ?? ''));
+
 /** Handle one inbound WhatsApp text. Returns the reply text (also sent). */
 export async function handleInbound({ channel, from, text, providerMsgId }) {
   const tenant = channel.tenant;
@@ -157,6 +160,10 @@ export async function handleInbound({ channel, from, text, providerMsgId }) {
   // number is read by Meta as another country and fails with "Re-engagement message").
   const reply = (t) => sendText({ tenantId: tenant.id, participantId: p?.id, to: mobile || from, text: t }).then(() => t);
 
+  // Loopdesk bug list 28 Nov 2026, A3/B3: "JOIN <code>" is a Regulars / Loopdesk
+  // QR scan on the shared number, not a dealer. Loyvexa joins go through the app
+  // link, so never answer it with "aap registered nahi ho".
+  if (!p && isOtherProductJoin(text)) return null;
   if (!p) return reply(L.hi.notRegistered(tenant.name, appLink(tenant)));
   let lang = p.language === 'en' ? 'en' : 'hi';
   const l = () => L[lang];
